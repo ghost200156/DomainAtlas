@@ -1,0 +1,11 @@
+.DS_Store
+
+# Frontend local environment
+.env
+.env.*
+!.env.example
+
+# Frontend dependencies and generated files
+node_modules/
+.react-router/
+build/
