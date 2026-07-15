@@ -1,0 +1,34 @@
+# OS / editor
+.DS_Store
+*.swp
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# uv
+.uv-cache/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Node
+node_modules/
+.npm/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+.react-router/
+
+# Logs
+*.log
