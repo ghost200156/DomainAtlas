@@ -21,7 +21,10 @@ def test_chat_request_requires_at_least_one_message():
         ChatMessageRequest(messages=[])
 
 
-def test_settings_normalizes_empty_api_base_and_configures_model():
+def test_settings_normalizes_empty_api_base_and_configures_model(monkeypatch):
+    for variable in ("ALL_PROXY", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "http_proxy", "https_proxy"):
+        monkeypatch.delenv(variable, raising=False)
+
     settings = Settings(
         openai_api_key="test-key",
         openai_api_base="  ",

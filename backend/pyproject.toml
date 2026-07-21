@@ -9,6 +9,7 @@ dependencies = [
     "pydantic-ai>=2.9.0",
     "pydantic-settings>=2.14.2",
     "python-dotenv>=1.2.2",
+    "socksio>=1.0.0",
     "uvicorn>=0.30.0",
 ]
 

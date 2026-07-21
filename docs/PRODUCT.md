@@ -48,15 +48,16 @@ Atlas
 → 复习或局部扩展
 ```
 
-主要结构化产物包括：
+第一版 Demo 当前使用的结构化产物包括：
 
 - `LearningBrief`：学习目标、背景、成果和时间预算；
 - `FrameworkPlan`：模块、核心问题、重点和排除项；
 - `ResearchPack`：来源、证据、争议和信息缺口；
-- `AtlasDraft`：待校验和审查的 Atlas；
+- `AtlasDocument`：模块、概念、关系、机制、案例、来源、学习路径和自测；
 - `QualityReport`：结构、引用和覆盖质量；
-- `AtlasVersion`：发布后的不可变版本；
-- `AssessmentResult`：自测结果及其对应的薄弱节点。
+- `AssessmentFeedback`：自测得分、反馈及其对应的复习节点。
+
+未来产品计划在 `AtlasDocument` 之外引入可修订的 `AtlasDraft` 和不可变的 `AtlasVersion`。它们尚未在第一版 Demo 中实现，不应与当前 JSON 任务存储混淆。
 
 ## 产品边界
 

@@ -45,6 +45,8 @@ async def chat_with_agent(request: ChatMessageRequest) -> StreamingResponse:
         response = StreamingResponse(stream_response(), media_type="text/event-stream")
         response.headers["Cache-Control"] = "no-cache"
         response.headers["Connection"] = "keep-alive"
+        response.headers["X-Accel-Buffering"] = "no"
+        response.headers["X-Vercel-AI-UI-Message-Stream"] = "v1"
         return response
     except Exception as exc:
         logger.exception("Chat endpoint failed before streaming started")

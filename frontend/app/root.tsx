@@ -5,14 +5,15 @@ import {
   Outlet,
   Scripts,
   ScrollRestoration,
+  Link,
 } from "react-router";
 
 import type { Route } from "./+types/root";
-import "./index.css";
+import "./app.css";
 
 export function Layout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="zh-CN">
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -29,12 +30,26 @@ export function Layout({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
-  return <Outlet />;
+  return (
+    <div className="app-shell">
+      <header className="site-header">
+        <Link to="/" className="brand" aria-label="DomainAtlas 首页">
+          <span className="brand-mark" aria-hidden="true">⌁</span>
+          <span>DomainAtlas</span>
+        </Link>
+        <nav aria-label="主导航">
+          <Link to="/new">开始测绘</Link>
+          <a href="https://github.com/ghost200156/DomainAtlas" target="_blank" rel="noreferrer">项目仓库 ↗</a>
+        </nav>
+      </header>
+      <Outlet />
+    </div>
+  );
 }
 
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
-  let message = "Oops!";
-  let details = "An unexpected error occurred.";
+  let message = "页面没有正确加载";
+  let details = "请刷新页面；如果问题仍然存在，请返回首页重新进入任务。";
   let stack: string | undefined;
 
   if (isRouteErrorResponse(error)) {
@@ -49,7 +64,7 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
   }
 
   return (
-    <main className="pt-16 p-4 container mx-auto">
+    <main className="error-page">
       <h1>{message}</h1>
       <p>{details}</p>
       {stack && (
