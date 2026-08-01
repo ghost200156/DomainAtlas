@@ -2,6 +2,7 @@ import { useState } from "react";
 
 interface ToolInvocationProps {
   invocation: {
+    type?: string;
     state?: string;
     toolCallId?: string;
     toolName?: string;
@@ -14,6 +15,7 @@ interface ToolInvocationProps {
 export const ToolInvocation = ({ invocation }: ToolInvocationProps) => {
   const { toolName, input, output, errorText } = invocation;
   const [isOpen, setIsOpen] = useState(false);
+  const displayName = toolName ?? invocation.type?.replace(/^tool-/, "");
 
   const hasInput = input !== undefined && input !== null;
   const hasOutput = output !== undefined && output !== null;
@@ -46,7 +48,7 @@ export const ToolInvocation = ({ invocation }: ToolInvocationProps) => {
           fontWeight: "bold"
         }}
       >
-        <span>🛠️ {toolName || "Tool"}</span>
+        <span>🛠️ {displayName || "Tool"}</span>
         <span>{isOpen ? "▲" : "▼"}</span>
       </button>
 
