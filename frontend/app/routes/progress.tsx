@@ -47,6 +47,18 @@ export default function ProgressRoute() {
             </article>
           );
         })}
+        <div className="event-history" aria-label="运行事件日志">
+          <div className="event-history-header"><span>RUN EVENTS</span><span>{run?.events.length ?? 0}</span></div>
+          {run?.events.map((event) => (
+            <article className={`event-entry event-${event.type}`} key={event.id}>
+              <span>#{String(event.id).padStart(2, "0")}</span>
+              <div>
+                <p>{event.type} · {event.step}</p>
+                <strong>{event.message}</strong>
+              </div>
+            </article>
+          ))}
+        </div>
       </section>
     </main>
   );

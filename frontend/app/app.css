@@ -139,6 +139,10 @@ button { cursor: pointer; }
 .log-step.done, .log-step.active { opacity: 1; }.step-marker { width: 30px; height: 30px; display: grid; place-items: center; border: 1px solid #78958f; font: 700 10px "Arial Narrow"; }
 .log-step.done .step-marker { background: var(--teal); border-color: var(--teal); }.log-step.active .step-marker { border-color: var(--orange); color: var(--orange); box-shadow: 0 0 0 5px rgba(228,111,70,.12); }
 .log-step p { margin: 0 0 5px; color: #7fa59d; font: 700 10px "Arial Narrow"; letter-spacing: .12em; text-transform: uppercase; }.log-step h2 { margin: 0; font-size: 17px; }.step-state { font-size: 11px; color: #9bb4ae; }.log-step.active .step-state { color: var(--orange); }
+.event-history { margin-top: 22px; padding-top: 18px; border-top: 1px solid rgba(255,255,255,.14); max-height: 260px; overflow-y: auto; }
+.event-history-header { display: flex; justify-content: space-between; color: #7fa59d; font: 700 10px "Arial Narrow"; letter-spacing: .12em; }
+.event-entry { display: grid; grid-template-columns: 40px 1fr; gap: 8px; padding: 12px 0; border-bottom: 1px solid rgba(255,255,255,.08); }
+.event-entry > span { color: #7fa59d; font: 700 10px "Arial Narrow"; }.event-entry p { margin: 0 0 4px; color: #7fa59d; font: 700 9px "Arial Narrow"; letter-spacing: .1em; text-transform: uppercase; }.event-entry strong { font-size: 12px; line-height: 1.5; font-weight: 500; }.event-entry.event-error strong { color: #ffb19b; }.event-entry.event-fallback strong { color: #f2b08f; }
 
 .atlas-wide { width: min(1480px, calc(100% - 48px)); margin-inline: auto; }
 .atlas-page { padding-top: 44px; background: #f7f8f5; }
