@@ -1,6 +1,9 @@
 import asyncio
+import logging
 from collections.abc import Coroutine
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 class TaskRegistry:
@@ -24,5 +27,13 @@ class TaskRegistry:
 
     def _finish(self, key: str, task: asyncio.Task[None]) -> None:
         self._tasks.pop(key, None)
-        if not task.cancelled():
-            task.exception()
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            logger.error(
+                "Background task %s failed with %s",
+                key,
+                type(error).__name__,
+                exc_info=(type(error), error, error.__traceback__),
+            )
