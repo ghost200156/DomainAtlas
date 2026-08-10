@@ -1,8 +1,10 @@
 import asyncio
 import logging
 
-from app.schemas.demo import DemoError, RunEvent, RunStatus
+from app.ai import GenerationFailure, GenerationSuccess
+from app.ai.generate import generate_planning
 from app.core.config import Settings, get_settings
+from app.schemas.demo import DemoError, RunEvent, RunStatus
 from app.store import DemoStore
 from app.workflow.agents import LiveAgentPipeline
 from app.workflow.fixtures import (
@@ -116,13 +118,19 @@ class DemoOrchestrator:
             await self._checkpoint(run_id, step, "Planning Agent 正在绘制模块路线。")
             run = await self.store.get(run_id)
             if self._can_run_live():
-                try:
-                    output = await self._pipeline().plan(run.brief)
-                    run.calibration = output.calibration
-                    run.plan = output.plan
+                result = await generate_planning(run.brief, self.settings)
+                if isinstance(result, GenerationSuccess):
+                    run.calibration = result.output.calibration
+                    run.plan = result.output.plan
                     run.execution_mode = "live"
-                except Exception as error:
-                    self._use_fixture(run, step, error)
+                else:
+                    assert isinstance(result, GenerationFailure)
+                    logger.warning(
+                        "Planning generation failed after strategies %s: %s",
+                        [attempt.strategy.value for attempt in result.diagnostics.attempts],
+                        result.error.category,
+                    )
+                    self._use_fixture(run, step, result.error)
                     run.calibration = make_calibration(run.brief)
                     run.plan = make_plan(run.brief)
             else:

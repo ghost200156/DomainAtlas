@@ -11,24 +11,10 @@ from app.schemas.demo import (
     AtlasDocument,
     FrameworkPlan,
     LearningBrief,
-    PlanningOutput,
     ResearchPack,
 )
 
 OutputT = TypeVar("OutputT", bound=BaseModel)
-
-PLANNING_PROMPT = """
-你是 DomainAtlas 的 Planning Agent。你的唯一任务是确认学习边界并生成可执行框架。
-
-规则：
-- 使用中文，忠实保留用户目标，不静默扩大或替换目标。
-- 生成 4–6 个互不重叠的模块，每个核心模块至少有三个核心问题。
-- estimated_concepts 必须等于模块数乘以 6，使最终 Atlas 形成 24–36 个概念节点。
-- 模块 ID 使用简短、稳定的英文 kebab-case；learning_sequence 只引用这些 ID。
-- 规模必须匹配可用时间；明确排除项、证据要求和完成标准。
-- 输入已经足够形成 Demo 计划时不要追问；若有歧义，在 calibration.questions 中最多保留三个问题，同时仍给出安全的建议计划。
-- 不执行研究，不声称已经核验事实。
-""".strip()
 
 RESEARCH_PROMPT = """
 你是 DomainAtlas 的 Research Agent。你的唯一任务是在给定的受控资料包内整理证据。
@@ -89,13 +75,6 @@ class LiveAgentPipeline:
             timeout=self.timeout_seconds,
         )
         return result.output
-
-    async def plan(self, brief: LearningBrief) -> PlanningOutput:
-        return await self._run(
-            PlanningOutput,
-            PLANNING_PROMPT,
-            f"学习任务如下：\n{brief.model_dump_json(indent=2)}",
-        )
 
     async def research(
         self,
