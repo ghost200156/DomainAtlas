@@ -8,17 +8,45 @@ import { RunModeBadge } from "../RunModeBadge";
 export default function PlanRoute() {
   const { runId } = useParams();
   const navigate = useNavigate();
-  const { run, error } = useRunPolling(runId);
+  const { run, error, setRun } = useRunPolling(runId);
   const [confirming, setConfirming] = useState(false);
+  const [actionError, setActionError] = useState("");
 
   async function confirm() {
     if (!runId || !run?.plan) return;
     setConfirming(true);
-    await demoApi.confirmPlan(runId, run.plan);
-    navigate(`/runs/${runId}/progress`);
+    setActionError("");
+    try {
+      await demoApi.confirmPlan(runId, run.plan);
+      navigate(`/runs/${runId}/progress`);
+    } catch (reason) {
+      setActionError(reason instanceof Error ? reason.message : "无法开始生成");
+      setConfirming(false);
+    }
+  }
+
+  async function retry() {
+    if (!runId) return;
+    setActionError("");
+    try {
+      setRun(await demoApi.retryRun(runId));
+    } catch (reason) {
+      setActionError(reason instanceof Error ? reason.message : "无法重试任务");
+    }
   }
 
   if (error) return <main className="state-page"><p className="form-error">{error}</p></main>;
+  if (run?.status === "FAILED") {
+    return (
+      <main className="state-page">
+        <p className="eyebrow">PLANNING AGENT · FAILED</p>
+        <h1>路线规划没有完成</h1>
+        <p>{run.events.at(-1)?.message ?? run.error?.message ?? "后端任务执行失败。"}</p>
+        {actionError && <p className="form-error">{actionError}</p>}
+        <button className="button button-primary" onClick={retry}>重试路线规划</button>
+      </main>
+    );
+  }
   if (!run?.plan) {
     return (
       <main className="state-page">
@@ -59,6 +87,7 @@ export default function PlanRoute() {
         <button className="button button-primary" onClick={confirm} disabled={confirming}>
           {confirming ? "正在出发…" : "确认路线并开始生成 →"}
         </button>
+        {actionError && <p className="form-error">{actionError}</p>}
       </div>
     </main>
   );

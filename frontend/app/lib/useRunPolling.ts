@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { demoApi } from "./api";
 import type { DemoRun } from "./types";
@@ -8,6 +8,14 @@ const ACTIVE_STATUSES = new Set(["PREPARING_PLAN", "GENERATING"]);
 export function useRunPolling(runId: string | undefined) {
   const [run, setRun] = useState<DemoRun>();
   const [error, setError] = useState("");
+  const [refreshToken, setRefreshToken] = useState(0);
+
+  const updateRun = useCallback((nextRun: DemoRun) => {
+    setRun(nextRun);
+    if (ACTIVE_STATUSES.has(nextRun.status)) {
+      setRefreshToken((current) => current + 1);
+    }
+  }, []);
 
   useEffect(() => {
     if (!runId) return;
@@ -33,7 +41,7 @@ export function useRunPolling(runId: string | undefined) {
       active = false;
       if (timer) clearTimeout(timer);
     };
-  }, [runId]);
+  }, [runId, refreshToken]);
 
-  return { run, error, setRun };
+  return { run, error, setRun: updateRun };
 }
