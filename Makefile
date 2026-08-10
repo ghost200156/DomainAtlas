@@ -14,9 +14,15 @@ setup-frontend:
 
 dev:
 	@set -e; \
-	trap 'kill 0' INT TERM EXIT; \
-	($(UV) run --directory backend fastapi dev src/app/main.py) & \
-	(pnpm --dir frontend dev) & \
+	$(UV) run --directory backend uvicorn app.main:app --app-dir src --host 127.0.0.1 --port 8000 & \
+	backend_pid=$$!; \
+	pnpm --dir frontend dev --host 127.0.0.1 & \
+	frontend_pid=$$!; \
+	cleanup() { \
+		kill $$backend_pid $$frontend_pid 2>/dev/null || true; \
+		wait $$backend_pid $$frontend_pid 2>/dev/null || true; \
+	}; \
+	trap cleanup INT TERM EXIT; \
 	wait
 
 test:
