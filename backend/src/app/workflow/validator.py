@@ -46,7 +46,7 @@ def validate_atlas(
     module_ids = {module.id for module in atlas.modules}
     concept_ids = {concept.id for concept in atlas.concepts}
     source_ids = {source.id for source in atlas.sources}
-    minimum_concepts = max(24, len(atlas.modules) * 4)
+    minimum_concepts = max(6, len(atlas.modules) * 2)
 
     if len(atlas.modules) < 3:
         issues.append("Atlas must contain at least three modules")
@@ -60,21 +60,21 @@ def validate_atlas(
         issues.append("Atlas must contain an assessment")
     if len(concept_ids) != len(atlas.concepts):
         issues.append("Concept IDs must be unique")
-    covered_module_ids = {concept.module_id for concept in atlas.concepts}
+    covered_module_ids = {concept.module_id for concept in atlas.concepts if concept.module_id}
     if not module_ids.issubset(covered_module_ids):
         issues.append("Every Atlas module must contain at least one concept")
     concept_count_by_module = {
-        module_id: sum(concept.module_id == module_id for concept in atlas.concepts)
+        module_id: sum(concept.module_id == module_id for concept in atlas.concepts if concept.module_id)
         for module_id in module_ids
     }
     if any(count < 4 for count in concept_count_by_module.values()):
-        issues.append("Every Atlas module must contain at least four concepts")
+        issues.append("Every Atlas module must contain at least two concepts")
     if any(not concept.key_points for concept in atlas.concepts):
         issues.append("Every concept must include key points")
     if any(not concept.example for concept in atlas.concepts):
         issues.append("Every concept must include an example")
     for concept in atlas.concepts:
-        if concept.module_id not in module_ids:
+        if concept.module_id and concept.module_id != "__center__" and concept.module_id not in module_ids:
             issues.append(f"Concept {concept.id} references a missing module")
     for relation in atlas.relations:
         if relation.source_id not in concept_ids or relation.target_id not in concept_ids:

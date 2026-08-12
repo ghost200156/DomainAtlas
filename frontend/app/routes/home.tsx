@@ -19,7 +19,7 @@ export default function Home() {
       <section className="hero page-width">
         <div className="hero-copy">
           <p className="eyebrow">FIELD LEARNING SYSTEM · DEMO 01</p>
-          <h1>别再读一堆资料。<br />先看清这片领域。</h1>
+          <h1>别再读<br />&emsp;&emsp;&emsp;一堆资料<br />先看清<br />&emsp;&emsp;&emsp;这片领域</h1>
           <p className="hero-lead">
             给出一个陌生主题，DomainAtlas 会先和你确认路线，再把证据、概念和关系整理成一张可以探索的学习地图。
           </p>

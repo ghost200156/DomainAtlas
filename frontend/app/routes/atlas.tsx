@@ -22,7 +22,7 @@ const NODE_HEIGHT = 156;
 const CLUSTER_WIDTH = 760;
 const CLUSTER_HEIGHT = 560;
 const MAP_TOP = 104;
-const MIN_SCALE = 0.78;
+const MIN_SCALE = 0.15;
 const MAX_SCALE = 3.2;
 
 const RELATION_LABELS: Record<string, string> = {
@@ -44,6 +44,25 @@ type DragState = {
 
 function cleanLabel(value: string) {
   return value.replace(LEADING_SYMBOLS, "");
+}
+
+function renderMarkdown(text: string): string {
+  // Strip question number prefixes and convert markdown
+  let html = text
+    .replace(/^题\d+[：:]\s*/gm, '')
+    .replace(/```(\w*)\n([\s\S]*?)```/g, (_: string, _lang: string, code: string) =>
+      `<pre><code>${code.trim()}</code></pre>`)
+    .replace(/`([^`]+)`/g, '<code>$1</code>');
+  // ## Heading → <h4>
+  html = html.replace(/^## (.+)$/gm, '<h4 class="dossier-h4">$1</h4>');
+  // ### Sub-heading → <h5>
+  html = html.replace(/^### (.+)$/gm, '<h5 class="dossier-h5">$1</h5>');
+  // **bold** → <strong>
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  // Double newline = paragraph break, single newline = line break
+  html = html.replace(/\n{2,}/g, '</p><p>');
+  html = html.replace(/\n/g, '<br/>');
+  return `<p>${html}</p>`;
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -120,6 +139,7 @@ export default function AtlasRoute() {
   const { run, error, setRun } = useRunPolling(runId);
   const atlas = run?.atlas;
   const [selectedId, setSelectedId] = useState("");
+  const [hoveredId, setHoveredId] = useState("");
   const [query, setQuery] = useState("");
   const [view, setView] = useState<ViewState>({ x: 40, y: 40, scale: 0.82 });
   const [isPanning, setIsPanning] = useState(false);
@@ -127,6 +147,62 @@ export default function AtlasRoute() {
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
+
+  // ── Chat panel state (with localStorage persistence) ──
+  const CHAT_STORAGE_KEY = `domainatlas-chat-${runId}`;
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatMessages, setChatMessages] = useState<{ role: "user" | "tutor"; text: string }[]>(() => {
+    try { const saved = localStorage.getItem(CHAT_STORAGE_KEY); return saved ? JSON.parse(saved) : []; }
+    catch { return []; }
+  });
+  const [chatInput, setChatInput] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+  // Persist chat on every change
+  useEffect(() => { localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(chatMessages)); }, [chatMessages, CHAT_STORAGE_KEY]);
+
+  // ── Per-concept verify state ──
+  const [verifyState, setVerifyState] = useState<Record<string, { mode: boolean; text: string; result: { passed: boolean; feedback: string } | null; loading: boolean }>>({});
+  function getVerify(cid: string) {
+    return verifyState[cid] ?? { mode: false, text: "", result: null, loading: false };
+  }
+  function setVerify(cid: string, patch: Partial<ReturnType<typeof getVerify>>) {
+    setVerifyState((prev) => ({ ...prev, [cid]: { ...getVerify(cid), ...patch } }));
+  }
+  // Reset verify when closing concept
+  function resetVerify(cid: string) {
+    setVerifyState((prev) => {
+      const next = { ...prev };
+      delete next[cid];
+      return next;
+    });
+  }
+
+  // ── Spoiler state for examples ──
+  const [revealedExamples, setRevealedExamples] = useState<Set<string>>(new Set());
+
+  // ── Search state ──
+  const [cachedResults, setCachedResults] = useState<{ title: string; url: string; snippet: string; source: string }[]>([]);
+  const [extraResults, setExtraResults] = useState<{ title: string; url: string; snippet: string; source: string }[]>([]);
+  const searchResults = [...cachedResults, ...extraResults];
+  const [searchLoading, setSearchLoading] = useState(false);
+  const lastSearchedCid = useRef("");
+  // Load cached results from run data.  If none cached, auto-search.
+  useEffect(() => {
+    setExtraResults([]);
+    if (selectedId && run) {
+      const cached = (run as any)?.pre_search_results?.[selectedId];
+      if (Array.isArray(cached) && cached.length > 0) {
+        setCachedResults(cached);
+        setSearchLoading(false);
+      } else {
+        setCachedResults([]);
+        searchForSources();
+      }
+    } else {
+      setCachedResults([]);
+      setSearchLoading(false);
+    }
+  }, [selectedId, run]);
 
   const atlasIndex = useMemo(() => {
     if (!atlas) return null;
@@ -169,46 +245,62 @@ export default function AtlasRoute() {
 
   const layout = useMemo(() => {
     if (!atlas || !atlasIndex) {
-      return {
-        width: 1160,
-        height: 680,
-        positions: new Map<string, { x: number; y: number }>(),
-        modulePositions: new Map<string, { x: number; y: number }>(),
-      };
+      return { width: 1400, height: 1000, positions: new Map(), modulePositions: new Map() };
     }
 
     const columns = Math.min(3, Math.max(2, Math.ceil(Math.sqrt(atlas.modules.length))));
     const rows = Math.ceil(atlas.modules.length / columns);
-    const width = Math.max(1080, columns * CLUSTER_WIDTH + 80);
-    const height = Math.max(650, MAP_TOP + rows * CLUSTER_HEIGHT + 68);
+    const size = Math.max(1080, columns * CLUSTER_WIDTH + 80, MAP_TOP + rows * CLUSTER_HEIGHT + 68);
+    const width = size;
+    const height = size;
     const positions = new Map<string, { x: number; y: number }>();
     const modulePositions = new Map<string, { x: number; y: number }>();
-    const offsets = [
-      { x: 295, y: 196 },
-      { x: 295, y: 8 },
-      { x: 520, y: 82 },
-      { x: 540, y: 332 },
-      { x: 295, y: 408 },
-      { x: 46, y: 304 },
-    ];
+    const cx = width / 2, cy = height / 2;
+    const ringR = Math.min(width, height) / 4.5;
 
     atlas.modules.forEach((module, moduleIndex) => {
-      const concepts = atlasIndex.conceptsByModule.get(module.id) ?? [];
-      const column = moduleIndex % columns;
-      const row = Math.floor(moduleIndex / columns);
-      const stagger = row % 2 === 1 ? 42 : 0;
-      const clusterX = 34 + column * CLUSTER_WIDTH + stagger;
-      const clusterY = MAP_TOP + row * CLUSTER_HEIGHT;
+      const rawConcepts = atlasIndex.conceptsByModule.get(module.id) ?? [];
+      const concepts = rawConcepts.filter((c: {id: string}) => c.id !== '__center__');
+      const angle = (moduleIndex / atlas.modules.length) * 2 * Math.PI - Math.PI / 2;
+      const clusterX = cx + Math.cos(angle) * ringR;
+      const clusterY = cy + Math.sin(angle) * ringR;
       modulePositions.set(module.id, { x: clusterX, y: clusterY });
-      concepts.forEach((concept, conceptIndex) => {
-        const offset = offsets[conceptIndex % offsets.length];
-        const ring = Math.floor(conceptIndex / offsets.length);
-        positions.set(concept.id, {
-          x: clusterX + offset.x + ring * 18,
-          y: clusterY + offset.y + ring * 18,
-        });
+      const cosA = Math.cos(angle);
+      const sinA = Math.sin(angle);
+
+      // First concept is the region root — stays at module centre.
+      // Remaining concepts (leaves) are evenly distributed in a 60° fan
+      // centred on the radial direction, all at the same distance.
+      const SPREAD = (Math.PI * 2) / 3;    // 120° total arc
+      const DIST = 260;                    // unified leaf distance from module centre
+      concepts.forEach((concept, i) => {
+        if (i === 0) {
+          // Root stays at module centre
+          positions.set(concept.id, {
+            x: clusterX - NODE_WIDTH / 2,
+            y: clusterY - NODE_HEIGHT / 2,
+          });
+        } else {
+          const leafIndex = i - 1;
+          const leafCount = concepts.length - 1;
+          const step = leafCount > 0 ? SPREAD / leafCount : 0;
+          const localAngle = -SPREAD / 2 + step / 2 + leafIndex * step;
+          const rx = Math.cos(localAngle) * DIST;
+          const ry = Math.sin(localAngle) * DIST;
+          // Rotate by module angle so the fan points radially outward
+          const worldRx = rx * cosA - ry * sinA;
+          const worldRy = rx * sinA + ry * cosA;
+          positions.set(concept.id, {
+            x: clusterX + worldRx - NODE_WIDTH / 2,
+            y: clusterY + worldRy - NODE_HEIGHT / 2,
+          });
+        }
       });
     });
+
+    if (atlas.concepts[0]?.id === "__center__") {
+      positions.set(atlas.concepts[0].id, { x: cx - NODE_WIDTH / 2, y: cy - NODE_HEIGHT / 2 });
+    }
 
     return { width, height, positions, modulePositions };
   }, [atlas, atlasIndex]);
@@ -216,26 +308,53 @@ export default function AtlasRoute() {
   const entryConceptId = atlasIndex?.learningOrder[0];
   const entryPosition = entryConceptId ? layout.positions.get(entryConceptId) : undefined;
 
+  const unlockedConceptIds = useMemo(() => {
+    if (!atlasIndex) return new Set<string>();
+    const rootId = atlasIndex.learningOrder[0];
+    const unlocked = new Set<string>(rootId ? [rootId] : []);
+    const understoodIds = atlasIndex.learningOrder.filter(
+      (conceptId) => run?.progress[conceptId] === "understood",
+    );
+
+    understoodIds.forEach((conceptId) => {
+      unlocked.add(conceptId);
+      (atlasIndex.relationsByConcept.get(conceptId) ?? []).forEach((relation) => {
+        unlocked.add(relation.source_id === conceptId ? relation.target_id : relation.source_id);
+      });
+    });
+    return unlocked;
+  }, [atlasIndex, run?.progress]);
+
   const fitToViewport = useCallback((minimumScale: number) => {
     const viewport = viewportRef.current;
     if (!viewport) return;
+    const centerPos = layout.positions.get('__center__');
+    const ccx = centerPos ? centerPos.x + NODE_WIDTH / 2 : layout.width / 2;
+    const ccy = centerPos ? centerPos.y + NODE_HEIGHT / 2 : layout.height / 2;
+    // Find farthest edge distance from center node to any unlocked concept
+    let maxDist = 300;
+    atlas?.concepts.forEach(c => {
+      if (!unlockedConceptIds.has(c.id)) return;
+      const p = layout.positions.get(c.id);
+      if (p) {
+        maxDist = Math.max(maxDist,
+          ccx - p.x,                    // left edge
+          p.x + NODE_WIDTH - ccx,       // right edge
+          ccy - p.y,                    // top edge
+          p.y + NODE_HEIGHT - ccy,      // bottom edge
+        );
+      }
+    });
+    const needed = maxDist * 2 - 100;
     const scale = clamp(
-      Math.min((viewport.clientWidth - 72) / layout.width, (viewport.clientHeight - 64) / layout.height),
-      minimumScale,
-      1,
-    );
+      Math.min((viewport.clientWidth - 72) / needed, (viewport.clientHeight - 120) / needed),
+      minimumScale, 1);
     setView({
       scale,
-      x:
-        minimumScale >= 1 && viewport.clientWidth < layout.width
-          ? 16
-          : (viewport.clientWidth - layout.width * scale) / 2,
-      y: Math.max(
-        (viewport.clientHeight - layout.height * scale) / 2,
-        minimumScale >= 1 ? 118 - MAP_TOP * scale : Number.NEGATIVE_INFINITY,
-      ),
+      x: viewport.clientWidth / 2 - ccx * scale + 100,
+      y: viewport.clientHeight / 2 - ccy * scale + 20,
     });
-  }, [layout.height, layout.width]);
+  }, [layout, atlas, unlockedConceptIds]);
 
   const fitMap = useCallback(() => fitToViewport(MIN_SCALE), [fitToViewport]);
 
@@ -252,7 +371,12 @@ export default function AtlasRoute() {
       });
     }
     let frame = requestAnimationFrame(centerEntryPoint);
+    let lastW = window.innerWidth, lastH = window.innerHeight;
     function recenterAfterResize() {
+      const dw = Math.abs(window.innerWidth - lastW);
+      const dh = Math.abs(window.innerHeight - lastH);
+      lastW = window.innerWidth; lastH = window.innerHeight;
+      if (dw < 30 && dh < 30) return; // ignore small changes (Alt key menu bar)
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(centerEntryPoint);
     }
@@ -349,23 +473,6 @@ export default function AtlasRoute() {
     setIsPanning(false);
   }
 
-  const unlockedConceptIds = useMemo(() => {
-    if (!atlasIndex) return new Set<string>();
-    const rootId = atlasIndex.learningOrder[0];
-    const unlocked = new Set<string>(rootId ? [rootId] : []);
-    const understoodIds = atlasIndex.learningOrder.filter(
-      (conceptId) => run?.progress[conceptId] === "understood",
-    );
-
-    understoodIds.forEach((conceptId) => {
-      unlocked.add(conceptId);
-      (atlasIndex.relationsByConcept.get(conceptId) ?? []).forEach((relation) => {
-        unlocked.add(relation.source_id === conceptId ? relation.target_id : relation.source_id);
-      });
-    });
-    return unlocked;
-  }, [atlasIndex, run?.progress]);
-
   const matchingConcepts = useMemo(() => {
     if (!atlas || !query.trim()) return [];
     const keyword = query.trim().toLocaleLowerCase();
@@ -416,6 +523,98 @@ export default function AtlasRoute() {
     setRun(await demoApi.updateProgress(currentRunId, selected.id, "understood"));
     setSelectedId("");
   }
+
+  // ── Chat handlers ──
+  async function sendChatMessage() {
+    const text = chatInput.trim();
+    if (!text || chatLoading) return;
+    // Include current concept context if one is selected
+    let msg = text;
+    if (selected) {
+      msg = `[背景：用户在学习「${cleanLabel(selected.name)}」，定义：${selected.definition.slice(0, 400)}，关键点：${selected.key_points.join('；')}]\n\n用户问题：${text}`;
+    }
+    setChatMessages((prev) => [...prev, { role: "user", text }]);
+    setChatInput("");
+    setChatLoading(true);
+    try {
+      const res = await fetch(`/api/runs/${runId}/tutor`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: msg }),
+      });
+      const data = await res.json();
+      setChatMessages((prev) => [...prev, { role: "tutor", text: data.reply }]);
+    } catch {
+      setChatMessages((prev) => [...prev, { role: "tutor", text: "导师暂不可用，请重试。" }]);
+    } finally {
+      setChatLoading(false);
+    }
+  }
+
+  // ── Verify handlers (per-concept) ──
+  async function checkUnderstanding() {
+    if (!selected) return;
+    const cid = selected.id;
+    const v = getVerify(cid);
+    if (!v.text.trim() || v.loading) return;
+    setVerify(cid, { loading: true, result: null });
+    try {
+      const res = await fetch(`/api/runs/${runId}/concepts/${cid}/verify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ explanation: v.text }),
+      });
+      const data = await res.json();
+      setVerify(cid, { result: data });
+      if (data.passed) {
+        setRun(await demoApi.updateProgress(currentRunId, cid, "understood"));
+      }
+    } catch {
+      setVerify(cid, { result: { passed: true, feedback: "验证暂不可用，已标记。" } });
+      setRun(await demoApi.updateProgress(currentRunId, cid, "understood"));
+    } finally {
+      setVerify(cid, { loading: false });
+    }
+  }
+
+  async function searchForSources(query_text?: string, append = false) {
+    if (searchLoading) return;
+    setSearchLoading(true);
+    if (!append) { setCachedResults([]); setExtraResults([]); }
+    try {
+      // Use concept-specific content as context for AI
+      const msg = query_text || (selected ? `概念：${selected.name}\n定义：${selected.definition.slice(0, 500)}\n关键点：${selected.key_points.join('\n')}` : "");
+      if (!msg) { setSearchLoading(false); return; }
+      const res = await fetch(`/api/runs/${runId}/recommend-sources`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: msg }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          if (append) {
+            setExtraResults(prev => [...prev, ...data.map((r: any) => ({...r, source: 'NEW', isNew: true}))]);
+          } else {
+            setCachedResults(data);
+            // Persist to local cache so the concept won't need re-searching
+            if (selected) {
+              setRun((prev: any) => prev ? {
+                ...prev,
+                pre_search_results: { ...(prev.pre_search_results ?? {}), [selected.id]: data },
+              } : prev);
+            }
+          }
+        }
+      }
+    } catch {
+      // ignore
+    } finally {
+      setSearchLoading(false);
+    }
+  }
+
+
 
   function focusModule(moduleId: string) {
     const firstConcept = conceptsByModule.get(moduleId)?.find((concept) => unlockedConceptIds.has(concept.id));
@@ -498,7 +697,7 @@ export default function AtlasRoute() {
             onWheel={handleWheel}
             ref={viewportRef}
           >
-            <svg className="atlas-stage" aria-label="SVG 矢量知识地图">
+            <svg className="atlas-stage" viewBox={`0 0 ${layout.width} ${layout.height}`} preserveAspectRatio="xMid yMid meet" aria-label="SVG 矢量知识地图">
               <defs>
                 <marker id="arrow-muted" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
                   <path d="M0 0L8 4L0 8Z" fill="#8494b5" />
@@ -512,8 +711,8 @@ export default function AtlasRoute() {
                   <stop offset="1" stopColor="#cbd5e5" stopOpacity=".9" />
                 </linearGradient>
                 <radialGradient id="clearing-fill">
-                  <stop offset="0" stopColor="#eef3fb" stopOpacity="1" />
-                  <stop offset=".64" stopColor="#eef3fb" stopOpacity=".94" />
+                  <stop offset="0" stopColor="#eef3fb" stopOpacity=".7" />
+                  <stop offset=".64" stopColor="#eef3fb" stopOpacity=".5" />
                   <stop offset="1" stopColor="#eef3fb" stopOpacity="0" />
                 </radialGradient>
                 <radialGradient id="mist-light-fill">
@@ -554,9 +753,9 @@ export default function AtlasRoute() {
                     const position = layout.modulePositions.get(module.id);
                     return position ? (
                       <g className="fog-contours" key={`fog-contours-${module.id}`} transform={`translate(${position.x} ${position.y})`}>
-                        <ellipse cx="380" cy="275" rx="352" ry="244" />
-                        <ellipse cx="380" cy="275" rx="288" ry="195" />
-                        <ellipse cx="380" cy="275" rx="218" ry="142" />
+                        <ellipse cx="0" cy="0" rx="280" ry="200" />
+                        <ellipse cx="0" cy="0" rx="220" ry="150" />
+                        <ellipse cx="0" cy="0" rx="160" ry="100" />
                       </g>
                     ) : null;
                   })}
@@ -582,11 +781,8 @@ export default function AtlasRoute() {
                       key={module.id}
                       transform={`translate(${position.x} ${position.y})`}
                     >
-                      <ellipse className="module-field" cx="380" cy="275" rx="365" ry="252" fill={`url(#module-field-${moduleIndex})`} />
-                      <ellipse className="module-orbit" cx="380" cy="275" rx="344" ry="232" stroke={module.color} />
-                      <circle cx="24" cy="20" r="4" fill={module.color} />
-                      <text className="module-index" x="36" y="24" fill={module.color}>区域 {String(moduleIndex + 1).padStart(2, "0")}</text>
-                      <text className="module-name" x="20" y="50">{cleanLabel(module.title)}</text>
+                      <ellipse className="module-field" cx="0" cy="0" rx="300" ry="200" fill={`url(#module-field-${moduleIndex})`} />
+                      <ellipse className="module-orbit" cx="0" cy="0" rx="290" ry="190" stroke={module.color} opacity="0.4" />
                     </g>
                   );
                 })}
@@ -597,18 +793,29 @@ export default function AtlasRoute() {
                     const source = layout.positions.get(relation.source_id);
                     const target = layout.positions.get(relation.target_id);
                     if (!source || !target) return null;
-                    const x1 = source.x + NODE_WIDTH / 2;
-                    const y1 = source.y + 56;
-                    const x2 = target.x + NODE_WIDTH / 2;
-                    const y2 = target.y + 56;
-                    const bend = Math.max(75, Math.abs(y2 - y1) * 0.45);
-                    const active = selected
-                      ? relation.source_id === selected.id || relation.target_id === selected.id
-                      : false;
+                    const cx1 = source.x + NODE_WIDTH / 2;
+                    const cy1 = source.y + 56;
+                    const cx2 = target.x + NODE_WIDTH / 2;
+                    const cy2 = target.y + 56;
+                    const tdx = cx2 - cx1, tdy = cy2 - cy1;
+                    const tdist = Math.sqrt(tdx * tdx + tdy * tdy) || 1;
+                    const stopR = 55;
+                    const x1 = cx1, y1 = cy1;
+                    const x2 = cx2 - (tdx / tdist) * stopR;
+                    const y2 = cy2 - (tdy / tdist) * stopR;
+                    const active = (selected && (relation.source_id === selected.id || relation.target_id === selected.id))
+                      || (hoveredId && (relation.source_id === hoveredId || relation.target_id === hoveredId));
+                    const fromCenter = relation.source_id === '__center__' || relation.target_id === '__center__';
+                    const bend = Math.max(40, tdist * 0.15);
+                    // Control points along the line direction so arrow points at center
+                    const cpx1 = x1 + (tdx / tdist) * bend;
+                    const cpy1 = y1 + (tdy / tdist) * bend;
+                    const cpx2 = x2 - (tdx / tdist) * bend;
+                    const cpy2 = y2 - (tdy / tdist) * bend;
                     return (
                       <path
                         className={active ? "active" : ""}
-                        d={`M${x1} ${y1}C${x1 + bend} ${y1} ${x2 - bend} ${y2} ${x2} ${y2}`}
+                        d={`M${x1} ${y1}C${cpx1} ${cpy1} ${cpx2} ${cpy2} ${x2} ${y2}`}
                         key={relation.id}
                         markerEnd={`url(#arrow-${active ? "active" : "muted"})`}
                       />
@@ -630,9 +837,11 @@ export default function AtlasRoute() {
                   return (
                     <g
                       aria-label={accessibleName}
-                      className={`explorer-node ${frontierIds.has(concept.id) ? "frontier" : ""} ${isSelected ? "selected" : ""} ${isDimmed ? "dimmed" : ""} ${run.progress[concept.id] === "understood" ? "understood" : ""}`}
+                      className={`explorer-node ${concept.id === (atlas.concepts[0]?.id) ? "root-node" : ""} ${frontierIds.has(concept.id) ? "frontier" : ""} ${isSelected ? "selected" : ""} ${isDimmed ? "dimmed" : ""} ${run.progress[concept.id] === "understood" ? "understood" : ""}`}
                       key={concept.id}
                       onClick={() => setSelectedId(concept.id)}
+                      onMouseEnter={() => setHoveredId(concept.id)}
+                      onMouseLeave={() => setHoveredId("")}
                       onDragStart={(event) => event.preventDefault()}
                       onKeyDown={(event) => {
                         if (event.key === "Enter" || event.key === " ") {
@@ -653,6 +862,41 @@ export default function AtlasRoute() {
                   );
                 })}
 
+                {/* Module labels on top - only show when module has discovered concepts */}
+                {atlas.modules.map((module, moduleIndex) => {
+                  const modConcepts = conceptsByModule.get(module.id) ?? [];
+                  const modDiscovered = modConcepts.some((c: {id: string}) => unlockedConceptIds.has(c.id));
+                  if (!modDiscovered) return null;
+                  const firstConcept = modConcepts.find((c: {id: string}) => c.id !== '__center__');
+                  if (!firstConcept) return null;
+                  const pos = layout.positions.get(firstConcept.id);
+                  if (!pos) return null;
+                  const title = cleanLabel(module.title);
+                  const labelX = pos.x;
+                  const labelY = pos.y - 44;
+                  return (
+                    <foreignObject key={`label-${module.id}`} x={labelX} y={labelY} width="500" height="44">
+                      <div style={{
+                        display: 'inline-block',
+                        background: 'rgba(255,255,255,0.93)',
+                        border: `1.5px solid ${module.color}`,
+                        borderRadius: '6px',
+                        padding: '4px 10px',
+                        fontSize: '12px',
+                        lineHeight: '1.4',
+                        whiteSpace: 'nowrap',
+                      }}>
+                        <span style={{color: module.color, fontWeight: 700, fontSize: '11px'}}>
+                          区域 {String(moduleIndex + 1).padStart(2, "0")}
+                        </span>
+                        <br/>
+                        <span style={{color: '#1e2b4f', fontWeight: 600}}>
+                          {cleanLabel(module.title)}
+                        </span>
+                      </div>
+                    </foreignObject>
+                  );
+                })}
               </g>
             </svg>
           </div>
@@ -695,81 +939,177 @@ export default function AtlasRoute() {
           <i className="liquid-orb liquid-orb-two" aria-hidden="true" />
           <button className="dossier-close" onClick={() => setSelectedId("")} aria-label="关闭概念详情" ref={closeButtonRef}>×</button>
           <div className="dossier-scroll">
-          <header className="dossier-hero jelly-fragment jelly-from-top">
+          <header className="dossier-hero">
             <span className="module-chip"><i style={{ background: selectedModule?.color }} />{selectedModule ? cleanLabel(selectedModule.title) : "概念"}</span>
-            <p>概念 {String(atlasIndex.conceptOrder.get(selected.id)).padStart(2, "0")}</p>
             <h2 id="concept-title">{cleanLabel(selected.name)}</h2>
-            <div id="concept-definition">{selected.definition}</div>
           </header>
 
-          <section className="dossier-focus jelly-fragment jelly-from-right">
-            <h3>为什么重要</h3>
-            <p>{selected.why_it_matters}</p>
+          {/* ── Answer ── */}
+          <section className="dossier-answer">
+            <div dangerouslySetInnerHTML={{ __html: renderMarkdown(selected.definition) }} />
           </section>
 
+          {/* ── Key points ── */}
           {selected.key_points.length > 0 ? (
-            <section className="explorer-detail-section jelly-fragment jelly-from-left">
-              <h3>核心认识</h3>
-              <ul>{selected.key_points.slice(0, 4).map((point) => <li key={point}>{point}</li>)}</ul>
+            <section className="dossier-facts">
+              <ul>{selected.key_points.slice(0, 4).map((point) => <li key={point} dangerouslySetInnerHTML={{ __html: renderMarkdown(point) }} />)}</ul>
             </section>
           ) : null}
 
-          {selected.example ? (
-            <section className="explorer-example jelly-fragment jelly-from-bottom"><span>例子</span><p>{selected.example}</p></section>
-          ) : null}
-
-          <section className="explorer-detail-section relation-section jelly-fragment jelly-from-bottom">
-            <h3>沿关系探索 <span>{selectedRelations.length}</span></h3>
-            <div className="explorer-relations">
-              {selectedRelations.map((relation) => {
-                const otherId = relation.source_id === selected.id ? relation.target_id : relation.source_id;
-                const other = atlasIndex.conceptsById.get(otherId);
+          {/* ── Why it matters + example ── */}
+          <section className="dossier-why">
+            <div dangerouslySetInnerHTML={{ __html: renderMarkdown(selected.why_it_matters) }} />
+          </section>
+          {selected.example ? (() => {
+            const text = selected.example;
+            // Split by blank line before 【解】 markers
+            // Split into Q&A pairs: split by 【解】, pair questions with answers
+            const segments = text.split(/【解】/);
+            const pairs: {q: string, a: string}[] = [];
+            for (let i = 0; i < segments.length; i++) {
+              const seg = segments[i].trim();
+              if (!seg) continue;
+              if (i === 0) {
+                pairs.push({q: seg, a: ''});
+              } else {
+                // This segment contains: answer for previous Q + possibly next question
+                const nextQIdx = seg.search(/\n(?=题\d|判断|代码|\d+\.)/);
+                if (nextQIdx >= 0) {
+                  if (pairs.length > 0) pairs[pairs.length - 1].a = seg.slice(0, nextQIdx).trim();
+                  pairs.push({q: seg.slice(nextQIdx).trim(), a: ''});
+                } else {
+                  if (pairs.length > 0) pairs[pairs.length - 1].a = seg;
+                }
+              }
+            }
+            return (
+            <section className="dossier-example">
+              {pairs.map((pair, idx) => {
+                const qid = selected.id + '-q' + idx;
+                const revealed = revealedExamples.has(qid);
                 return (
-                  <button key={relation.id} onClick={() => other && focusConcept(other.id)}>
-                    <span>{RELATION_LABELS[relation.relation_type] ?? relation.relation_type}</span>
-                    <b>{other ? cleanLabel(other.name) : otherId}</b>
-                    <small>{relation.explanation}</small>
-                    <i>→</i>
-                  </button>
+                  <div key={idx} className="example-question">
+                    <div className="example-prompt" dangerouslySetInnerHTML={{ __html: renderMarkdown(pair.q) }} />
+                    {pair.a ? (
+                      <>
+                      <button className="spoiler-toggle" onClick={() => {
+                        setRevealedExamples(prev => {
+                          const next = new Set(prev);
+                          if (next.has(qid)) next.delete(qid);
+                          else next.add(qid);
+                          return next;
+                        });
+                      }}>
+                        {revealed ? '▲ 收起解法' : '▶ 显示解法'}
+                      </button>
+                      {revealed ? (
+                        <div className="example-solution" dangerouslySetInnerHTML={{ __html: renderMarkdown(pair.a) }} />
+                      ) : null}
+                      </>
+                    ) : null}
+                  </div>
                 );
               })}
-              {selectedRelations.length === 0 ? <p className="empty-detail">完成当前概念后，关联的知识分支将在地图中显现。</p> : null}
-            </div>
+            </section>
+            );
+          })() : null}
+
+          {/* ── Sources ── */}
+          <section className="dossier-evidence">
+            <h3>相关链接</h3>
+            {searchLoading && searchResults.length === 0 ? (
+              <p className="empty-detail">搜索中...</p>
+            ) : null}
+            {searchResults.length > 0 ? (
+              <div className="search-results">
+                {searchResults.map((r, i) => (
+                  <a key={i} href={r.url} target="_blank" rel="noreferrer" className="search-result-item">
+                    {(r as any).isNew ? <span className="search-source">NEW</span> : null}
+                    <b>{r.title}</b>
+                    <p>{r.url}</p>
+                  </a>
+                ))}
+              </div>
+            ) : !searchLoading ? (
+              <p className="empty-detail">正在加载来源...</p>
+            ) : null}
+            <button className="button button-small" onClick={() => {
+              if (selected) {
+                const msg = `概念：${cleanLabel(selected.name)}\n定义：${selected.definition.slice(0, 500)}\n关键点：${selected.key_points.join('；')}\n不要推荐之前已推荐过的URL。推荐具体知识点的页面，不要入门教程。`;
+                searchForSources(msg, true);
+              }
+            }} disabled={searchLoading} style={{marginTop:10}}>
+              {searchLoading ? "搜索中..." : "搜索更多链接"}
+            </button>
           </section>
 
-          {(selected.misconception || selected.uncertainty || selectedMechanisms.length > 0 || selectedCases.length > 0) ? (
-            <details className="dossier-more">
-              <summary>深入理解</summary>
-              {selected.misconception ? <div><b>常见误区</b><p>{selected.misconception}</p></div> : null}
-              {selected.uncertainty ? <div><b>边界与不确定性</b><p>{selected.uncertainty}</p></div> : null}
-              {selectedMechanisms.map((mechanism) => <div key={mechanism.id}><b>{mechanism.title}</b><p>{mechanism.explanation}</p></div>)}
-              {selectedCases.map((item) => <div key={item.id}><b>案例 · {item.title}</b><p>{item.summary}</p></div>)}
-            </details>
+          {/* ── Related ── */}
+          {selectedRelations.length > 0 ? (
+            <section className="dossier-related">
+              <h3>关联概念</h3>
+              <div className="explorer-relations">
+                {selectedRelations.map((relation) => {
+                  const otherId = relation.source_id === selected.id ? relation.target_id : relation.source_id;
+                  const other = atlasIndex.conceptsById.get(otherId);
+                  return (
+                    <button key={relation.id} onClick={() => other && focusConcept(other.id)}>
+                      <span>{RELATION_LABELS[relation.relation_type] ?? relation.relation_type}</span>
+                      <b>{other ? cleanLabel(other.name) : otherId}</b>
+                      <small>{relation.explanation}</small>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
           ) : null}
 
-          <details className="dossier-more evidence-drawer">
-            <summary>证据与来源 <span>{selectedEvidence.length}</span></summary>
-            {selectedEvidence.map((evidence) => {
-              const source = atlasIndex.sourcesById.get(evidence.source_id);
-              return (
-                <article key={evidence.id}>
-                  <span>{evidence.evidence_type} · {evidence.confidence}</span>
-                  <p>{evidence.statement}</p>
-                  {source ? <a href={source.url} target="_blank" rel="noreferrer">{source.title} ↗</a> : null}
-                </article>
-              );
-            })}
-            {selectedEvidence.length === 0 ? <p className="empty-detail">当前概念没有可展示的证据卡片。</p> : null}
-          </details>
+          {(selected.misconception || selected.uncertainty) ? (
+            <section className="dossier-notes">
+              {selected.misconception ? <div className="note"><b>误区</b><p>{selected.misconception}</p></div> : null}
+              {selected.uncertainty ? <div className="note"><b>不确定</b><p>{selected.uncertainty}</p></div> : null}
+            </section>
+          ) : null}
           </div>
+
+          {/* ── Footer: mark understood (bottom-right) + ask AI ── */}
           <footer className="dossier-footer">
-            <span>{run.progress[selected.id] === "understood" ? "该区域已经完成探索" : "读完后继续，地图将显现相关知识分支"}</span>
-            <button className="understood-button" onClick={markUnderstood} disabled={run.progress[selected.id] === "understood"}>
-              {run.progress[selected.id] === "understood" ? "✓ 已完成探索" : "完成探索，揭开关联分支"}
-            </button>
+            <div className="dossier-actions">
+              {run.progress[selected.id] !== "understood" ? (
+                <button className="understood-button" onClick={markUnderstood}>标记为已理解</button>
+              ) : (
+                <span className="verify-passed">✓ 已理解</span>
+              )}
+              <button className="button button-small" onClick={() => {
+                setChatOpen(true);
+                if (selected && chatMessages.length === 0) {
+                  setChatMessages([{role: "tutor" as const, text: `可以追问关于「${cleanLabel(selected.name)}」的任何细节。`}]);
+                }
+              }}>💬 向AI提问</button>
+            </div>
           </footer>
         </aside>
         </div>
+      ) : null}
+      {chatOpen ? (
+        <aside className="tutor-panel">
+          <header className="tutor-header">
+            <h3>{run?.model_name || "AI"}</h3>
+            <button onClick={() => setChatOpen(false)} aria-label="关闭">×</button>
+          </header>
+          <div className="tutor-messages">
+            {chatMessages.map((msg, i) => (
+              <div key={i} className={`tutor-msg tutor-msg-${msg.role}`}>
+                <b>{msg.role === "user" ? "你" : (run?.model_name || "AI")}</b>
+                <p style={{whiteSpace:"pre-wrap"}}>{msg.text}</p>
+              </div>
+            ))}
+            {chatLoading ? <div className="tutor-msg tutor-msg-tutor"><b>{run?.model_name || "AI"}</b><p>...</p></div> : null}
+          </div>
+          <form className="tutor-input" onSubmit={(e) => { e.preventDefault(); sendChatMessage(); }}>
+            <input value={chatInput} onChange={e => setChatInput(e.target.value)} placeholder="输入问题..." disabled={chatLoading} />
+            <button type="submit" disabled={chatLoading || !chatInput.trim()}>发送</button>
+          </form>
+        </aside>
       ) : null}
     </main>
   );

@@ -32,3 +32,9 @@ build/
 
 # Logs
 *.log
+
+# Claude
+.claude/
+.claude-plugin/
+memory/
+skills-main/

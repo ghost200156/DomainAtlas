@@ -76,7 +76,7 @@ export default function CreateRun() {
             {submitting ? "正在建立任务…" : "让 Agent 规划路线 →"}
           </button>
         </form>
-        <aside className="field-notes">
+        <aside className="field-notes" style={{width: 380, padding: '24px 28px', flexShrink: 0}}>
           <p className="eyebrow">FIELD NOTES</p>
           <h2>范围越清楚，<br />地图越有用。</h2>
           <ol>

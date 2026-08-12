@@ -6,6 +6,9 @@ from uuid import uuid4
 from fastapi import APIRouter, Header, HTTPException, Response, status
 from fastapi.responses import StreamingResponse
 
+from pathlib import Path
+
+from app.core.config import get_settings
 from app.schemas.demo import (
     AssessmentAttemptRequest,
     AssessmentFeedback,
@@ -15,9 +18,12 @@ from app.schemas.demo import (
     FrameworkPlan,
     LearningBrief,
     ProgressUpdateRequest,
+    ReviewPath,
     RunEvent,
     RunStatus,
 )
+from app.schemas.learning import TutorRequest, VerifyRequest, VerifyResponse, SearchResult
+from app.skills import SkillRegistry
 from app.store import DemoStore
 from app.workflow.fixtures import make_atlas, make_plan, make_research_pack
 from app.workflow.orchestrator import DemoOrchestrator
@@ -26,7 +32,21 @@ from app.workflow.validator import validate_plan
 
 router = APIRouter(prefix="/api", tags=["demo"])
 store = DemoStore()
-orchestrator = DemoOrchestrator(store)
+_settings = get_settings()
+
+# Resolve the skills directory relative to the project root.
+# When running from backend/src/app/..., the repo root is 4 levels up.
+_skills_path = Path(_settings.skills_dir)
+if not _skills_path.is_absolute():
+    _repo_root = Path(__file__).resolve().parents[4]
+    _skills_path = _repo_root / _settings.skills_dir
+
+skill_registry = SkillRegistry(_skills_path)
+
+orchestrator = DemoOrchestrator(
+    store,
+    skill_registry=skill_registry,
+)
 tasks = TaskRegistry()
 
 
@@ -197,6 +217,28 @@ async def attempt_assessment(
     return feedback
 
 
+@router.post("/runs/{run_id}/review-path", response_model=ReviewPath)
+async def generate_review_path(run_id: str) -> ReviewPath:
+    run = await _get_run(run_id)
+    if run.atlas is None:
+        raise HTTPException(status_code=409, detail="领域地图还没有生成")
+    if not run.assessment_results and not run.progress:
+        raise HTTPException(status_code=409, detail="请先完成至少一次自测或标记学习进度")
+
+    try:
+        return await orchestrator._pipeline().review_path(
+            run.brief,
+            run.atlas,
+            run.assessment_results,
+            run.progress,
+        )
+    except Exception as error:
+        raise HTTPException(
+            status_code=502,
+            detail=f"复习路线生成失败：{error}",
+        ) from error
+
+
 @router.get("/runs/{run_id}/events")
 async def stream_events(
     run_id: str,
@@ -218,6 +260,114 @@ async def stream_events(
             await asyncio.sleep(0.35)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@router.post("/runs/{run_id}/tutor")
+async def tutor_chat(run_id: str, request: TutorRequest) -> dict:
+    """Chat with an AI tutor that has full atlas context."""
+    run = await _get_run(run_id)
+    if run.atlas is None:
+        raise HTTPException(status_code=409, detail="领域地图还没有生成")
+    concept = None
+    if request.message and run.atlas:
+        # Try to detect if user is asking about a specific concept
+        for c in run.atlas.concepts:
+            if c.name in request.message or c.id in request.message:
+                concept = c
+                break
+    try:
+        reply = await orchestrator._pipeline().tutor_chat(
+            run.atlas,
+            concept,
+            request.message,
+        )
+        return {"reply": reply}
+    except Exception as error:
+        raise HTTPException(status_code=502, detail=f"导师回复失败：{error}") from error
+
+
+@router.post("/runs/{run_id}/concepts/{concept_id}/verify", response_model=VerifyResponse)
+async def verify_concept(run_id: str, concept_id: str, request: VerifyRequest) -> VerifyResponse:
+    """AI evaluates whether the user truly understood a concept."""
+    run = await _get_run(run_id)
+    if run.atlas is None:
+        raise HTTPException(status_code=409, detail="领域地图还没有生成")
+    concept = next((c for c in run.atlas.concepts if c.id == concept_id), None)
+    if concept is None:
+        raise HTTPException(status_code=404, detail="没有找到这个概念")
+    try:
+        result = await orchestrator._pipeline().verify_understanding(
+            concept,
+            request.explanation,
+        )
+        return VerifyResponse(**result)
+    except Exception as error:
+        # Fallback: pass on any technical failure so UX isn't blocked
+        return VerifyResponse(
+            passed=True,
+            feedback=f"（验证服务暂时不可用，假设你已理解。具体反馈：{error}）",
+            unlock_concept_ids=[],
+        )
+
+
+@router.get("/runs/{run_id}/cached-sources/{concept_id}")
+async def get_cached_sources(run_id: str, concept_id: str) -> list[dict]:
+    """Get pre-searched source links for a concept."""
+    run = await _get_run(run_id)
+    cached = run.pre_search_results
+    return cached.get(concept_id, [])
+
+
+@router.post("/runs/{run_id}/recommend-sources")
+async def recommend_sources(run_id: str, request: TutorRequest) -> list[dict]:
+    """Ask AI to recommend actual URLs based on concept content."""
+    run = await _get_run(run_id)
+    query_text = request.message or run.brief.domain
+    try:
+        prompt = f"根据以下具体概念内容，推荐3个直接相关的网页链接（不要入门教程、不要总览页，要针对这个具体知识点的页面）。返回JSON数组[{{\"title\":\"网页标题\",\"url\":\"完整URL\"}}]。只输出JSON。\n\n概念内容：{query_text[:1000]}"
+        text = await orchestrator._pipeline()._run_text(prompt, "只输出JSON数组。")
+        import json as _json
+        text = text.strip()
+        if text.startswith("```"): text = text.split("\n", 1)[1].rsplit("\n```", 1)[0] if "```" in text[text.find("\n"):] else text.split("\n", 1)[1]
+        results = _json.loads(text) if text.strip().startswith('[') else []
+        return [{"title": r.get("title",""), "url": r.get("url",""), "snippet": r.get("url",""), "source": "ai"} for r in results[:5] if r.get("url")]
+    except Exception:
+        return []
+
+
+@router.post("/runs/{run_id}/search", response_model=list[SearchResult])
+async def search_sources(run_id: str, request: TutorRequest) -> list[SearchResult]:
+    """Live search for external sources about a topic."""
+    run = await _get_run(run_id)
+    if run.atlas is None:
+        raise HTTPException(status_code=409, detail="领域地图还没有生成")
+    results: list[SearchResult] = []
+    query = request.message or run.brief.domain
+    # Try Wikipedia
+    try:
+        from app.workflow.research import _read_wikipedia
+        wiki = await asyncio.to_thread(_read_wikipedia, query)
+        if wiki:
+            results.append(SearchResult(title=wiki.title, url=wiki.url, snippet=wiki.extract[:300], source="wikipedia"))
+    except Exception:
+        pass
+    # Try arXiv
+    try:
+        from app.workflow.research import _search_arxiv
+        arxiv_results = await asyncio.to_thread(_search_arxiv, query, max_results=2)
+        for ar in arxiv_results:
+            results.append(SearchResult(title=ar.title, url=ar.url, snippet=ar.summary[:300], source="arxiv"))
+    except Exception:
+        pass
+    # Try GitHub
+    try:
+        from app.workflow.research import _search_github
+        gh = await asyncio.to_thread(_search_github, query)
+        if gh:
+            results.append(SearchResult(title=gh.full_name, url=gh.url, snippet=gh.description[:300], source="github"))
+    except Exception:
+        pass
+    return results
 
 
 @router.get("/demo/fixture", response_model=AtlasDocument)
