@@ -937,7 +937,11 @@ export default function AtlasRoute() {
         >
           <i className="liquid-orb liquid-orb-one" aria-hidden="true" />
           <i className="liquid-orb liquid-orb-two" aria-hidden="true" />
-          <button className="dossier-close" onClick={() => setSelectedId("")} aria-label="关闭概念详情" ref={closeButtonRef}>×</button>
+          <button className="dossier-close" onClick={() => setSelectedId("")} aria-label="关闭概念详情" ref={closeButtonRef}>
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+              <path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+            </svg>
+          </button>
           <div className="dossier-scroll">
           <header className="dossier-hero">
             <span className="module-chip"><i style={{ background: selectedModule?.color }} />{selectedModule ? cleanLabel(selectedModule.title) : "概念"}</span>

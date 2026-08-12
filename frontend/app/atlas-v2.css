@@ -577,11 +577,14 @@ body:has(.atlas-explorer) .site-header {
   width: 54px;
   height: 54px;
   margin: 0;
+  padding: 0;
   border: 0;
   border-radius: 50%;
   background: rgba(228, 232, 247, .82);
   color: #33405e;
-  font-size: 32px;
+  display: grid;
+  place-items: center;
+  line-height: 0;
   backdrop-filter: blur(8px);
 }
 .atlas-explorer .dossier-close:hover { background: #dfe1ff; color: #3e40c8; transform: rotate(8deg); }
