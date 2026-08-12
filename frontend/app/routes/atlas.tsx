@@ -140,6 +140,7 @@ export default function AtlasRoute() {
   const atlas = run?.atlas;
   const [selectedId, setSelectedId] = useState("");
   const [hoveredId, setHoveredId] = useState("");
+  const [openedConceptIds, setOpenedConceptIds] = useState<Set<string>>(() => new Set());
   const [query, setQuery] = useState("");
   const [view, setView] = useState<ViewState>({ x: 40, y: 40, scale: 0.82 });
   const [isPanning, setIsPanning] = useState(false);
@@ -203,6 +204,10 @@ export default function AtlasRoute() {
       setSearchLoading(false);
     }
   }, [selectedId, run]);
+
+  useEffect(() => {
+    setOpenedConceptIds(new Set());
+  }, [runId]);
 
   const atlasIndex = useMemo(() => {
     if (!atlas) return null;
@@ -402,11 +407,21 @@ export default function AtlasRoute() {
     };
   }, [selectedId]);
 
+  const markConceptOpened = useCallback((conceptId: string) => {
+    setOpenedConceptIds((current) => {
+      if (current.has(conceptId)) return current;
+      const next = new Set(current);
+      next.add(conceptId);
+      return next;
+    });
+  }, []);
+
   const focusConcept = useCallback(
     (conceptId: string, preferredScale = 0.9) => {
       const viewport = viewportRef.current;
       const position = layout.positions.get(conceptId);
       if (!viewport || !position) return;
+      markConceptOpened(conceptId);
       const scale = clamp(Math.max(view.scale, preferredScale), MIN_SCALE, MAX_SCALE);
       setSelectedId(conceptId);
       setView({
@@ -415,7 +430,7 @@ export default function AtlasRoute() {
         y: viewport.clientHeight / 2 - (position.y + NODE_HEIGHT / 2) * scale,
       });
     },
-    [layout.positions, view.scale],
+    [layout.positions, markConceptOpened, view.scale],
   );
 
   function zoomBy(factor: number) {
@@ -839,13 +854,17 @@ export default function AtlasRoute() {
                       aria-label={accessibleName}
                       className={`explorer-node ${concept.id === (atlas.concepts[0]?.id) ? "root-node" : ""} ${frontierIds.has(concept.id) ? "frontier" : ""} ${isSelected ? "selected" : ""} ${isDimmed ? "dimmed" : ""} ${run.progress[concept.id] === "understood" ? "understood" : ""}`}
                       key={concept.id}
-                      onClick={() => setSelectedId(concept.id)}
+                      onClick={() => {
+                        markConceptOpened(concept.id);
+                        setSelectedId(concept.id);
+                      }}
                       onMouseEnter={() => setHoveredId(concept.id)}
                       onMouseLeave={() => setHoveredId("")}
                       onDragStart={(event) => event.preventDefault()}
                       onKeyDown={(event) => {
                         if (event.key === "Enter" || event.key === " ") {
                           event.preventDefault();
+                          markConceptOpened(concept.id);
                           setSelectedId(concept.id);
                         }
                       }}
@@ -855,7 +874,9 @@ export default function AtlasRoute() {
                     >
                       <ellipse className="node-aura" cx="85" cy="53" rx="54" ry="46" stroke={nodeColor} />
                       <GuardianGlyph variant={(conceptOrder - 1) % 5} color={nodeColor} phase={conceptOrder} />
-                      <circle className="node-state" cx="123" cy="23" r="6" fill={run.progress[concept.id] === "understood" ? "#278e73" : nodeColor} />
+                      {!openedConceptIds.has(concept.id) ? (
+                        <circle className="node-state" cx="123" cy="23" r="6" fill={run.progress[concept.id] === "understood" ? "#278e73" : nodeColor} />
+                      ) : null}
                       <text className="node-label" x="85" y="122">{cleanLabel(concept.name)}</text>
                       <text className="node-relations" x="85" y="142">{frontierIds.has(concept.id) ? "待探索" : `${relationCount} 条知识关联`}</text>
                     </g>
@@ -937,7 +958,11 @@ export default function AtlasRoute() {
         >
           <i className="liquid-orb liquid-orb-one" aria-hidden="true" />
           <i className="liquid-orb liquid-orb-two" aria-hidden="true" />
-          <button className="dossier-close" onClick={() => setSelectedId("")} aria-label="关闭概念详情" ref={closeButtonRef}>×</button>
+          <button className="dossier-close" onClick={() => setSelectedId("")} aria-label="关闭概念详情" ref={closeButtonRef}>
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+              <path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+            </svg>
+          </button>
           <div className="dossier-scroll">
           <header className="dossier-hero">
             <span className="module-chip"><i style={{ background: selectedModule?.color }} />{selectedModule ? cleanLabel(selectedModule.title) : "概念"}</span>
