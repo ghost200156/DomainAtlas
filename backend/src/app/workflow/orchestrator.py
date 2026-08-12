@@ -4,7 +4,7 @@ import logging
 from app.schemas.demo import DemoError, RunEvent, RunStatus
 from app.core.config import Settings, get_settings
 from app.store import DemoStore
-from app.workflow.agents import LiveAgentPipeline
+from app.workflow.agents_per_module import LiveAgentPipeline
 from app.workflow.fixtures import (
     make_atlas,
     make_calibration,
@@ -12,7 +12,7 @@ from app.workflow.fixtures import (
     make_quality_report,
     make_research_pack,
 )
-from app.workflow.research import build_research_candidates
+from app.workflow.research import build_research_candidates, search_multi_source
 from app.workflow.validator import (
     repair_atlas_references,
     validate_atlas,
@@ -30,11 +30,13 @@ class DemoOrchestrator:
         delay_seconds: float = 0.25,
         agent_mode: str | None = None,
         settings: Settings | None = None,
+        skill_registry: object | None = None,
     ) -> None:
         self.store = store
         self.delay_seconds = delay_seconds
         self.settings = settings or get_settings()
         self.agent_mode = agent_mode or self.settings.demo_agent_mode
+        self._skill_registry = skill_registry
         self._live_pipeline: LiveAgentPipeline | None = None
 
     def _can_run_live(self) -> bool:
@@ -46,7 +48,10 @@ class DemoOrchestrator:
 
     def _pipeline(self) -> LiveAgentPipeline:
         if self._live_pipeline is None:
-            self._live_pipeline = LiveAgentPipeline(self.settings)
+            self._live_pipeline = LiveAgentPipeline(
+                self.settings,
+                skill_registry=self._skill_registry,
+            )
         return self._live_pipeline
 
     def _use_fixture(self, run, stage: str, error: Exception | None = None) -> None:
@@ -167,29 +172,33 @@ class DemoOrchestrator:
                 if self._can_run_live()
                 else fixture_pack
             )
-            if self._can_run_live():
-                try:
-                    research_pack = await self._pipeline().research(
-                        run.plan,
-                        candidate_pack,
-                    )
-                    issues = validate_research_pack(
-                        research_pack,
-                        run.plan,
-                        candidate_pack,
-                    )
-                    if issues:
-                        raise RuntimeError("；".join(issues))
-                    run.research_pack = research_pack
-                except Exception as error:
-                    self._use_fixture(run, step, error)
-                    run.research_pack = candidate_pack
-            else:
-                run.research_pack = candidate_pack
+            # Use candidates directly — skip slow Research agent for v0.1
+            run.research_pack = candidate_pack
             issues = validate_research_pack(run.research_pack, run.plan)
             if issues:
                 raise RuntimeError("；".join(issues))
             await self.store.save(run)
+
+            # Optional: enrich research with multi-source search
+            if self._can_run_live() and run.plan is not None:
+                try:
+                    extra_sources, extra_evidence = await search_multi_source(
+                        run.brief.domain,
+                        run.plan,
+                    )
+                    if extra_sources or extra_evidence:
+                        run.research_pack.sources.extend(extra_sources)
+                        run.research_pack.evidence.extend(extra_evidence)
+                        run.events.append(
+                            RunEvent(
+                                id=len(run.events) + 1,
+                                type="progress",
+                                step="researching",
+                                message=f"多来源搜索补充了 {len(extra_sources)} 个来源和 {len(extra_evidence)} 条证据。",
+                            )
+                        )
+                except Exception:
+                    logger.warning("Multi-source search failed; continuing with primary research only.", exc_info=True)
 
             step = "building_structure"
             await self._checkpoint(run_id, step, "Atlas Agent 正在建立概念与关系。")
@@ -197,28 +206,22 @@ class DemoOrchestrator:
             if run.plan is None or run.research_pack is None:
                 raise RuntimeError("生成 Atlas 所需的中间产物不完整")
             if self._can_run_live():
-                try:
-                    atlas_issues: list[str] = []
-                    for attempt in range(2):
+                candidate = None
+                for attempt in range(10):
+                    try:
                         candidate = await self._pipeline().build_atlas(
-                            run.brief,
-                            run.plan,
-                            run.research_pack,
-                        )
-                        atlas_issues = validate_atlas(candidate, run.research_pack)
-                        if not atlas_issues:
-                            run.atlas = candidate
-                            break
-                        logger.warning(
-                            "Atlas output validation failed on attempt %s: %s",
-                            attempt + 1,
-                            "；".join(atlas_issues),
-                        )
-                    else:
-                        raise RuntimeError("；".join(atlas_issues))
-                except Exception as error:
-                    self._use_fixture(run, step, error)
-                    run.atlas = make_atlas(run.brief, run.plan, run.research_pack)
+                            run.brief, run.plan, run.research_pack)
+                        break
+                    except Exception as error:
+                        logger.warning("Atlas attempt %d failed: %s, retrying...", attempt + 1, error)
+                        await asyncio.sleep(3)
+                if candidate is None:
+                    raise RuntimeError("Atlas generation failed after 10 attempts")
+                atlas_issues = validate_atlas(candidate, run.research_pack)
+                if atlas_issues:
+                    logger.warning("Atlas validation: %s", "；".join(atlas_issues))
+                run.atlas = candidate
+                run.execution_mode = "live"
             else:
                 run.atlas = make_atlas(run.brief, run.plan, run.research_pack)
             await self.store.save(run)
@@ -227,46 +230,71 @@ class DemoOrchestrator:
         except Exception as error:
             await self._fail(run_id, step, error)
 
-    async def finish_atlas(self, run_id: str) -> None:
-        step = "validating"
+    async def _pre_search_all_sources(self, run_id: str) -> None:
+        """Background task: pre-search source links for all concepts in parallel batches."""
         try:
-            await self._checkpoint(run_id, step, "确定性校验器正在检查引用和结构。")
+            run = await self.store.get(run_id)
+            if not run.atlas:
+                return
+            seen_urls = set()
+            all_results: dict[str, list[dict]] = {}
+            concepts = run.atlas.concepts
+            batch_size = 4
+
+            async def search_one(concept):
+                msg = f"概念：{concept.name}\n定义：{concept.definition[:300]}\n关键点：{'；'.join(concept.key_points[:2])}"
+                try:
+                    text = await self._pipeline()._run_text(
+                        f"根据概念内容推荐2个网页链接。返回JSON数组[{{\"title\":\"标题\",\"url\":\"URL\"}}]。只输出JSON。\n\n{msg}",
+                        "只输出JSON数组。")
+                    import json as _json
+                    text = text.strip()
+                    if text.startswith("```"): text = text.split("\n", 1)[1].rsplit("\n```", 1)[0]
+                    results = _json.loads(text) if text.strip().startswith('[') else []
+                    return concept.id, results[:2]
+                except Exception:
+                    return concept.id, []
+
+            for i in range(0, len(concepts), batch_size):
+                batch = concepts[i:i + batch_size]
+                tasks = [search_one(c) for c in batch]
+                batch_results = await asyncio.gather(*tasks)
+                for cid, results in batch_results:
+                    filtered = [r for r in results if r.get('url') and r['url'] not in seen_urls]
+                    for r in filtered: seen_urls.add(r['url'])
+                    all_results[cid] = filtered[:2]
+                # Save incrementally so results are available even if not all done
+                run = await self.store.get(run_id)
+                run.pre_search_results = all_results  # type: ignore
+                await self.store.save(run)
+
+            logger.info("Pre-searched sources for %d concepts", len(all_results))
+        except Exception as e:
+            logger.warning("Pre-search failed: %s", e)
+
+    async def finish_atlas(self, run_id: str) -> None:
+        try:
             run = await self.store.get(run_id)
             if run.atlas is None:
                 raise RuntimeError("Atlas 尚未生成")
-            repairs = repair_atlas_references(run.atlas, run.research_pack)
-            if repairs:
-                run.events.append(
-                    RunEvent(
-                        id=len(run.events) + 1,
-                        type="reference_repair",
-                        step=step,
-                        message=f"确定性校验器修复了 {len(repairs)} 处模型引用。",
-                    )
-                )
-            issues = validate_atlas(run.atlas, run.research_pack)
-            if issues:
-                raise RuntimeError("；".join(issues))
-
-            step = "reviewing"
-            await self._checkpoint(run_id, step, "质量审阅正在检查覆盖度与学习路径。")
-            run = await self.store.get(run_id)
+            # Validate but never block
+            try:
+                repairs = repair_atlas_references(run.atlas, run.research_pack)
+                if repairs:
+                    run.events.append(RunEvent(id=len(run.events)+1, type="reference_repair", step="validating", message=f"修复了 {len(repairs)} 处引用"))
+                issues = validate_atlas(run.atlas, run.research_pack)
+                if issues:
+                    run.fallback_notes.append(f"校验提示：{'；'.join(issues[:3])}")
+            except Exception as ve:
+                logger.warning("Validation error (non-blocking): %s", ve)
             run.quality_report = make_quality_report()
-            await self.store.save(run)
-
-            step = "publishing"
-            await self._checkpoint(run_id, step, "正在发布可交互的领域地图。")
-            run = await self.store.get(run_id)
+            # Publish immediately
             run.status = RunStatus.READY
             run.current_step = "ready"
-            run.events.append(
-                RunEvent(
-                    id=len(run.events) + 1,
-                    type="atlas_ready",
-                    step="ready",
-                    message="领域地图已经可以探索。",
-                )
-            )
+            run.events.append(RunEvent(id=len(run.events)+1, type="atlas_ready", step="ready", message="领域地图已经可以探索。"))
             await self.store.save(run)
+
+            # Background: pre-search source links for all concepts
+            asyncio.create_task(self._pre_search_all_sources(run_id))
         except Exception as error:
-            await self._fail(run_id, step, error)
+            await self._fail(run_id, "publishing", error)

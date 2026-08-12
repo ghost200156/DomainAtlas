@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     openai_api_base: str | None = None
     openai_model: str = "qwen3.5-plus"
     demo_agent_mode: Literal["auto", "live", "fixture"] = "auto"
+    skills_dir: str = "skills/domainatlas"
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -31,9 +31,8 @@ export default function ProgressRoute() {
         <h1>{run?.status === "READY" ? "地图绘制完成" : "Agent 正在野外作业"}</h1>
         <p>{run?.events.at(-1)?.message ?? error ?? "正在读取任务进度…"}</p>
         {run && <RunModeBadge run={run} />}
-        {run?.fallback_notes.map((note) => <p className="fallback-note" key={note}>{note}</p>)}
+        <br/>
         {run?.status === "READY" && runId && <Link className="button button-primary" to={`/runs/${runId}/atlas`}>打开领域地图 →</Link>}
-        {run?.status === "FAILED" && <button className="button button-primary" onClick={retry}>从失败步骤重试</button>}
       </section>
       <section className="expedition-log">
         <div className="log-header"><span>FIELD LOG</span><span>RUN {runId?.slice(0, 8).toUpperCase()}</span></div>

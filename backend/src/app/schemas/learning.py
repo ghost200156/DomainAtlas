@@ -25,3 +25,28 @@ class FrameworkPlan(BaseModel):
     modules: list[FrameworkModule] = Field(min_length=1, max_length=20)
     exclusions: list[str] = Field(default_factory=list, max_length=20)
     assumptions: list[str] = Field(default_factory=list, max_length=20)
+
+
+# ── Tutor, Verify & Search ──
+
+
+class TutorRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=2_000)
+
+
+class VerifyRequest(BaseModel):
+    explanation: str = Field(min_length=1, max_length=2_000)
+
+
+class VerifyResponse(BaseModel):
+    passed: bool
+    feedback: str
+    unlock_concept_ids: list[str] = Field(default_factory=list)
+
+
+class SearchResult(BaseModel):
+    title: str
+    url: str
+    snippet: str
+    source: str  # "wikipedia", "arxiv", "github", "web"
+

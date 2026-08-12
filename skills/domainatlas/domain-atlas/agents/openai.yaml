@@ -1,0 +1,4 @@
+name: domain-atlas
+description: Build a structured knowledge map of an unfamiliar domain
+policy:
+  allow_implicit_invocation: false

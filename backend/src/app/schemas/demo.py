@@ -172,6 +172,28 @@ class AtlasDocument(BaseModel):
     gaps: list[str] = Field(default_factory=list)
 
 
+# ── Phase 2: Split Atlas generation ──
+
+
+class AtlasCore(BaseModel):
+    """Step 1 of Atlas generation: concepts, modules, and overview."""
+    title: str
+    overview: AtlasOverview
+    modules: list[AtlasModule]
+    concepts: list[ConceptNode]
+    sources: list[Source]
+    gaps: list[str] = Field(default_factory=list)
+
+
+class AtlasExtras(BaseModel):
+    """Step 2 of Atlas generation: relations, mechanisms, cases, learning path, assessments."""
+    relations: list[ConceptRelation]
+    mechanisms: list[Mechanism]
+    cases: list[CaseStudy]
+    learning_path: list[LearningStage]
+    assessments: list[Assessment]
+
+
 class QualityIssue(BaseModel):
     severity: Literal["critical", "major", "minor"]
     target_id: str
@@ -226,6 +248,7 @@ class DemoRun(BaseModel):
     events: list[RunEvent] = Field(default_factory=list)
     progress: dict[str, Literal["unvisited", "unclear", "understood"]] = Field(default_factory=dict)
     assessment_results: list[AssessmentFeedback] = Field(default_factory=list)
+    pre_search_results: dict[str, list[dict]] = Field(default_factory=dict)
     error: DemoError | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -241,3 +264,20 @@ class ProgressUpdateRequest(BaseModel):
 
 class AssessmentAttemptRequest(BaseModel):
     answer: str = Field(min_length=1, max_length=2_000)
+
+
+# ── Phase 2: Review Path ──
+
+
+class ReviewPathItem(BaseModel):
+    concept_id: str
+    weakness_reason: str
+    review_suggestion: str
+    supplementary_exercise: str | None = None
+    estimated_minutes: int = Field(ge=1, le=60)
+
+
+class ReviewPath(BaseModel):
+    review_items: list[ReviewPathItem]
+    total_estimated_minutes: int = Field(ge=1, le=720)
+    prerequisite_map: dict[str, list[str]] = Field(default_factory=dict)
