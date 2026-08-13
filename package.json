@@ -1,0 +1,23 @@
+{
+  "name": "domainatlas-dev",
+  "version": "0.0.0",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "bootstrap": "node scripts/bootstrap.mjs",
+    "dev": "concurrently --kill-others --names backend,frontend --prefix name \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "node scripts/backend.mjs -m fastapi dev src/app/main.py",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "test": "concurrently --kill-others-on-fail --names backend,frontend --prefix name \"npm run test:backend\" \"npm run test:frontend\"",
+    "test:backend": "node scripts/backend.mjs -m pytest -q",
+    "test:frontend": "npm --prefix frontend run typecheck",
+    "lint:backend": "node scripts/backend.mjs -m ruff check . --output-format concise",
+    "build:frontend": "npm --prefix frontend run build",
+    "check": "npm test && npm run lint:backend && npm run build:frontend"
+  },
+  "devDependencies": {
+    "concurrently": "10.0.4"
+  }
+}
