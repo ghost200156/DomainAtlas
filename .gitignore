@@ -12,9 +12,6 @@ __pycache__/
 .venv/
 venv/
 
-# uv
-.uv-cache/
-
 # Environment files
 .env
 .env.*

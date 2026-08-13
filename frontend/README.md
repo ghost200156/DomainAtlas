@@ -5,14 +5,14 @@ React Router 8 前端，提供任务创建、计划确认、生成进度、迷�
 ## 环境要求
 
 - Node.js 22+
-- pnpm 11
+- npm
 
 ## 安装
 
 从仓库根目录执行：
 
 ```bash
-pnpm --dir frontend install --frozen-lockfile
+npm --prefix frontend install
 ```
 
 ## 配置
@@ -32,7 +32,7 @@ VITE_API_BASE=http://127.0.0.1:8000/api
 从仓库根目录执行：
 
 ```bash
-pnpm --dir frontend dev
+npm --prefix frontend run dev
 ```
 
 默认访问地址：http://127.0.0.1:5173
@@ -42,7 +42,7 @@ pnpm --dir frontend dev
 ## 生产构建与启动
 
 ```bash
-pnpm --dir frontend build
+npm --prefix frontend run build
 ```
 
 Windows PowerShell：
@@ -50,20 +50,20 @@ Windows PowerShell：
 ```powershell
 $env:HOST="127.0.0.1"
 $env:PORT="5173"
-pnpm --dir frontend start
+npm --prefix frontend run start
 ```
 
 macOS / Linux：
 
 ```bash
-HOST=127.0.0.1 PORT=5173 pnpm --dir frontend start
+HOST=127.0.0.1 PORT=5173 npm --prefix frontend run start
 ```
 
 ## 验证
 
 ```bash
-pnpm --dir frontend typecheck
-pnpm --dir frontend build
+npm --prefix frontend run typecheck
+npm --prefix frontend run build
 ```
 
 当前 `Dockerfile` 仅保留为后续部署基础，不代表已经具备正式生产部署方案。

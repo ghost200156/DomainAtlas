@@ -5,14 +5,21 @@ FastAPI 后端，负责显式学习工作流、三个 Agent 阶段、结构化�
 ## 环境要求
 
 - Python 3.12+
-- uv
+- pip
 
 ## 安装
 
-从仓库根目录执行：
+推荐从仓库根目录执行：
 
 ```bash
-uv sync --directory backend
+npm run bootstrap
+```
+
+只安装后端时，也可以在 `backend` 目录执行：
+
+```bash
+python -m venv .venv
+.venv/bin/python -m pip install -r requirements-dev.txt
 ```
 
 ## 配置
@@ -36,10 +43,10 @@ DEMO_AGENT_MODE=auto
 
 ## 开发启动
 
-从 `backend` 目录执行：
+从仓库根目录执行：
 
 ```bash
-uv run uvicorn app.main:app --app-dir src --host 127.0.0.1 --port 8000 --reload
+node scripts/backend.mjs -m fastapi dev src/app/main.py --host 127.0.0.1 --port 8000
 ```
 
 访问地址：
@@ -50,7 +57,7 @@ uv run uvicorn app.main:app --app-dir src --host 127.0.0.1 --port 8000 --reload
 ## 生产方式启动本地构建
 
 ```bash
-uv run uvicorn app.main:app --app-dir src --host 127.0.0.1 --port 8000
+node scripts/backend.mjs -m fastapi run src/app/main.py --host 127.0.0.1 --port 8000
 ```
 
 这仍然是单机 Demo：任务保存在 `backend/data/runs/`，进程内后台任务在服务重启后不会自动恢复。
@@ -60,8 +67,8 @@ uv run uvicorn app.main:app --app-dir src --host 127.0.0.1 --port 8000
 从仓库根目录执行：
 
 ```bash
-uv run --directory backend pytest -q
-uv run --directory backend ruff check .
+npm run test:backend
+npm run lint:backend
 ```
 
 ## 常见问题

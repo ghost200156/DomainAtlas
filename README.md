@@ -27,17 +27,14 @@ Planning 与 Atlas 阶段可以使用真实模型；Research Agent 只在代码�
 
 - Git（如果通过 Git 克隆项目）；
 - Python 3.12 或更高版本；
-- [uv](https://docs.astral.sh/uv/getting-started/installation/)；
-- Node.js 22 或更高版本；
-- pnpm 11（执行 `npm install -g pnpm@11.9.0` 安装）。
+- Node.js 22 或更高版本（自带 npm）。
 
 检查安装是否成功：
 
 ```bash
 python --version
-uv --version
 node --version
-pnpm --version
+npm --version
 ```
 
 ### 2. 获取项目并安装依赖
@@ -45,11 +42,10 @@ pnpm --version
 进入仓库根目录后执行：
 
 ```bash
-uv sync --directory backend
-pnpm --dir frontend install --frozen-lockfile
+npm run bootstrap
 ```
 
-如果电脑上安装了 GNU Make，也可以用 `make setup` 代替上面两条命令；Windows 用户不需要额外安装 Make。
+该命令会创建 `backend/.venv`，通过 pip 安装 `backend/requirements-dev.txt`，并安装根目录和前端的 npm 依赖。
 
 ### 3. 配置模型服务
 
@@ -95,20 +91,11 @@ VITE_API_BASE=http://127.0.0.1:8000/api
 
 ### 4. 启动开发环境
 
-需要打开两个终端，并保持两个终端都在运行。
-
-终端 1：启动后端。
-
 ```bash
-cd backend
-uv run uvicorn app.main:app --app-dir src --host 127.0.0.1 --port 8000 --reload
+npm run dev
 ```
 
-终端 2：从仓库根目录启动前端。
-
-```bash
-pnpm --dir frontend dev
-```
+该命令通过 `concurrently` 同时启动后端和前端，停止项目时按一次 `Ctrl + C`。
 
 然后访问：
 
@@ -116,21 +103,18 @@ pnpm --dir frontend dev
 - 后端健康检查：http://127.0.0.1:8000/health
 - API 文档：http://127.0.0.1:8000/docs
 
-停止项目时，在两个终端中分别按 `Ctrl + C`。
-
 ### 5. 启动生产构建
 
 先构建前端：
 
 ```bash
-pnpm --dir frontend build
+npm run build:frontend
 ```
 
 启动后端：
 
 ```bash
-cd backend
-uv run uvicorn app.main:app --app-dir src --host 127.0.0.1 --port 8000
+node scripts/backend.mjs -m fastapi run src/app/main.py --host 127.0.0.1 --port 8000
 ```
 
 另开一个终端启动构建后的前端。
@@ -140,13 +124,13 @@ Windows PowerShell：
 ```powershell
 $env:HOST="127.0.0.1"
 $env:PORT="5173"
-pnpm --dir frontend start
+npm --prefix frontend run start
 ```
 
 macOS / Linux：
 
 ```bash
-HOST=127.0.0.1 PORT=5173 pnpm --dir frontend start
+HOST=127.0.0.1 PORT=5173 npm --prefix frontend run start
 ```
 
 ### 常见问题
@@ -209,21 +193,22 @@ Response: text/event-stream
 
 ## 检查与测试
 
-不依赖 Make 的跨平台命令：
+项目检查命令：
 
 ```bash
-uv run --directory backend pytest -q
-uv run --directory backend ruff check .
-pnpm --dir frontend typecheck
-pnpm --dir frontend build
+npm test
+npm run lint:backend
+npm run build:frontend
 ```
 
-安装了 GNU Make 时也可以执行 `make test`。当前检查包括后端单元测试、Ruff 检查、前端 TypeScript 类型检查和生产构建。
+也可以直接执行 `npm run check`，一次完成上述检查。
 
 ## 项目结构
 
 ```text
 .
+├── package.json          # 根目录开发命令与 concurrently
+├── scripts/              # npm 调用后端虚拟环境的入口
 ├── backend/
 │   ├── src/app/
 │   │   ├── api/
@@ -234,6 +219,8 @@ pnpm --dir frontend build
 │   │   ├── store.py
 │   │   └── main.py
 │   ├── data/runs/        # 本地 Demo 任务数据，不提交 Git
+│   ├── requirements.txt
+│   ├── requirements-dev.txt
 │   └── tests/
 ├── frontend/
 │   ├── app/routes/       # 创建、计划、进度和 Atlas 页面
@@ -241,7 +228,7 @@ pnpm --dir frontend build
 ├── docs/
 │   └── adr/
 ├── CHANGELOG.md
-└── Makefile
+└── README.md
 ```
 
 ## 项目文档
