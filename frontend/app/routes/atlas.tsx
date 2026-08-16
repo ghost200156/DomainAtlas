@@ -114,7 +114,7 @@ export default function AtlasRoute() {
   });
 
   return (
-    <main className={`atlas-explorer ${selected ? "details-open" : ""}`}>
+    <main className="atlas-explorer">
       <ExplorerTopbar
         matchingConcepts={matchingConcepts} onQueryChange={setQuery} onSearchSubmit={panZoom.focusOn}
         progressPercent={progressPercent} query={query} run={run}

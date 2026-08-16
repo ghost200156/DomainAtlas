@@ -61,7 +61,7 @@ export function FogField({
         return (
           <g
             aria-hidden="true"
-            className={`module-terrain discovered ${module.id === selectedModuleId ? "active" : ""}`}
+            className={`module-terrain ${module.id === selectedModuleId ? "active" : ""}`}
             key={module.id}
             transform={`translate(${position.x} ${position.y})`}
           >
