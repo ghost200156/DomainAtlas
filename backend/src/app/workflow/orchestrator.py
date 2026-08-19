@@ -219,15 +219,27 @@ class DemoOrchestrator:
                                 "Atlas attempt %d/3 failed: %s; retrying in 2s",
                                 attempt + 1,
                                 error,
+                                exc_info=True,
                             )
                             await asyncio.sleep(2)
                         else:
-                            logger.error("Atlas attempt 3/3 failed: %s", error)
+                            logger.error(
+                                "Atlas attempt 3/3 failed: %s",
+                                error,
+                                exc_info=True,
+                            )
                 if candidate is None:
                     raise RuntimeError("Atlas generation failed after 3 attempts")
                 atlas_issues = validate_atlas(candidate, run.research_pack)
                 if atlas_issues:
-                    logger.warning("Atlas validation: %s", "；".join(atlas_issues))
+                    run.events.append(
+                        RunEvent(
+                            id=len(run.events) + 1,
+                            type="warning",
+                            step="validating",
+                            message="校验提示：" + "；".join(atlas_issues[:3]),
+                        )
+                    )
                 run.atlas = candidate
                 run.execution_mode = "live"
             else:
@@ -297,6 +309,13 @@ class DemoOrchestrator:
                 logger.warning("Validation error (non-blocking): %s", ve)
             run.quality_report = make_quality_report()
             # Publish immediately
+            real_concepts = [
+                concept
+                for concept in run.atlas.concepts
+                if concept.module_id != "__center__"
+            ]
+            if not real_concepts:
+                raise RuntimeError("Atlas has no real concepts; marking as failed")
             run.status = RunStatus.READY
             run.current_step = "ready"
             run.events.append(RunEvent(id=len(run.events)+1, type="atlas_ready", step="ready", message="领域地图已经可以探索。"))
