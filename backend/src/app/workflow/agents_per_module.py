@@ -4,8 +4,6 @@ from __future__ import annotations
 import asyncio
 import json as _json
 import logging
-from typing import TypeVar
-
 from pydantic import BaseModel
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel
@@ -30,7 +28,6 @@ from app.workflow.agents import (
     REVIEWER_PROMPT,
 )
 
-OutputT = TypeVar("OutputT", bound=BaseModel)
 logger = logging.getLogger(__name__)
 
 CONCEPT_SYSTEM_PROMPT = """
