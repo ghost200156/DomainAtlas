@@ -49,10 +49,10 @@ CONCEPT_SYSTEM_PROMPT = """
 - 证据不足时保持保守，避免把推断写成确定事实。
 
 输出规则：
-- 恰好生成 2 个互不重复的概念。
+- 生成 2–3 个互不重复的概念。
 - definition：120–220 字（概念定义 + 机制，术语加粗）。
 - key_points：恰好 2 条具体规则，每条不超过 30 字。
-- example：一个简洁练习，题干 + 【解】+ 答案，总长控制在 100–150 字；匹配当前领域形式。
+- example：2-3道简洁练习题，每题题干 + 【解】+ 答案，题间空行分隔，总长控制在 150–250 字；匹配当前领域形式。
 - 使用中文，保持具体、直接，避免空泛的重要性陈述。
 - 严格返回要求的结构化输出，不添加额外解释。
 """.strip()
@@ -163,10 +163,10 @@ class LiveAgentPipeline:
             definition: str = F(description="## 概念(直接定义)→## 机制(原理与边界)。术语**加粗**。120-220字")
             why_it_matters: str = F(description="学会这个能做什么，一句话")
             key_points: list[str] = F(description="恰好2条具体规则，每条不超过30字", min_length=2, max_length=2)
-            example: str = F(description="一个简洁练习；题干+【解】+答案，总长100-150字；匹配当前领域形式")
+            example: str = F(description="2-3道简洁练习题；每题题干+【解】+答案，题间空行分隔，总长150-250字；匹配当前领域形式")
             evidence_ids: list[str] = F(default=[], description="本概念引用的 evidence ID，从上方参考证据中选取，没有则留空")
         class ModuleConcepts(BM):
-            concepts: list[MiniConcept] = F(min_length=2, max_length=2)
+            concepts: list[MiniConcept] = F(min_length=2, max_length=3)
 
         evidence_block = ""
         if evidence:
