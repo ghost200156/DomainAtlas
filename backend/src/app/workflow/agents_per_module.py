@@ -49,8 +49,10 @@ CONCEPT_SYSTEM_PROMPT = """
 - 证据不足时保持保守，避免把推断写成确定事实。
 
 输出规则：
-- 生成 2–3 个互不重复的概念。
-- 每个概念包含名称、定义、学习价值、关键点、2-3道适合当前领域的练习题以及 evidence_ids；每道题先写完整题干，再用【解】分隔答案，题间空行分隔。
+- 恰好生成 2 个互不重复的概念。
+- definition：120–220 字（概念定义 + 机制，术语加粗）。
+- key_points：恰好 2 条具体规则，每条不超过 30 字。
+- example：一个简洁练习，题干 + 【解】+ 答案，总长控制在 100–150 字；匹配当前领域形式。
 - 使用中文，保持具体、直接，避免空泛的重要性陈述。
 - 严格返回要求的结构化输出，不添加额外解释。
 """.strip()
@@ -108,7 +110,7 @@ class LiveAgentPipeline:
             output_type=output_type,
             system_prompt=system_prompt,
             model_settings=self.structured_settings,
-            retries=1,
+            retries=0,
         )
         return await self._run_agent(agent, prompt, self.timeout_seconds)
 
@@ -158,13 +160,13 @@ class LiveAgentPipeline:
         from pydantic import Field as F
         class MiniConcept(BM):
             name: str = F(description="教学主题名")
-            definition: str = F(description="## 概念(直接定义)→## 机制(原理与边界)。术语**加粗**。200-350字")
-            why_it_matters: str = F(description="学会这个能做什么")
-            key_points: list[str] = F(description="2-3条具体规则")
-            example: str = F(description="2-3道适合当前领域的练习题；每题先写完整题干，再用【解】分隔答案，题间空行分隔；可使用案例、判断、推演、计算或代码等形式")
+            definition: str = F(description="## 概念(直接定义)→## 机制(原理与边界)。术语**加粗**。120-220字")
+            why_it_matters: str = F(description="学会这个能做什么，一句话")
+            key_points: list[str] = F(description="恰好2条具体规则，每条不超过30字", min_length=2, max_length=2)
+            example: str = F(description="一个简洁练习；题干+【解】+答案，总长100-150字；匹配当前领域形式")
             evidence_ids: list[str] = F(default=[], description="本概念引用的 evidence ID，从上方参考证据中选取，没有则留空")
         class ModuleConcepts(BM):
-            concepts: list[MiniConcept] = F(min_length=2, max_length=3)
+            concepts: list[MiniConcept] = F(min_length=2, max_length=2)
 
         evidence_block = ""
         if evidence:
@@ -176,7 +178,7 @@ class LiveAgentPipeline:
             try:
                 agent = Agent(self.model, output_type=ModuleConcepts,
                               system_prompt=self._prompt_for("domainatlas-concepts", CONCEPT_SYSTEM_PROMPT),
-                              model_settings=self.concept_settings, retries=1)
+                              model_settings=self.concept_settings, retries=0)
                 output = await self._run_agent(agent, prompt, self.text_timeout)
                 items = output.concepts if output.concepts else []
                 if items:
