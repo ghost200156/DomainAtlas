@@ -115,7 +115,7 @@ class LiveAgentPipeline:
         return await self._run_agent(agent, prompt, self.timeout_seconds)
 
     async def _run_text(self, prompt, sys_prompt="用中文回复。"):
-        agent = Agent(self.model, system_prompt=sys_prompt, model_settings=self.text_settings)
+        agent = Agent(self.model, system_prompt=sys_prompt, model_settings=self.text_settings, retries=0)
         return await self._run_agent(agent, prompt, self.text_timeout)
 
     async def _run_json(self, prompt, schema_model, sys_prompt, max_retries=2):
