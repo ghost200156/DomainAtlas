@@ -13,7 +13,7 @@ class MiniConcept(BaseModel):
         max_length=2,
     )
     example: str = Field(
-        description="2-3道练习题；每题题干+【解】+答案，题间空行分隔；匹配当前领域形式"
+        description="2-3道练习题；格式严格为：题1：题干\n【解】答案\n\n题2：题干\n【解】答案；题号必须用「题1」「题2」「题3」，不得用其他前缀；匹配当前领域形式"
     )
     evidence_ids: list[str] = Field(
         default=[],
