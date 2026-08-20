@@ -49,7 +49,7 @@ function cleanLabel(value: string) {
 function renderMarkdown(text: string): string {
   // Strip question number prefixes and convert markdown
   let html = text
-    .replace(/^题\d+[：:]\s*/gm, '')
+    .replace(/^题目?\d+[：:．.\s]\s*/gm, '')
     .replace(/```(\w*)\n([\s\S]*?)```/g, (_: string, _lang: string, code: string) =>
       `<pre><code>${code.trim()}</code></pre>`)
     .replace(/`([^`]+)`/g, '<code>$1</code>');
@@ -998,7 +998,7 @@ export default function AtlasRoute() {
                 pairs.push({q: seg, a: ''});
               } else {
                 // This segment contains: answer for previous Q + possibly next question
-                const nextQIdx = seg.search(/\n(?=题\d|判断|代码|\d+\.)/);
+                const nextQIdx = seg.search(/\n(?=题目?\d|判断|代码|\d+\.)/);
                 if (nextQIdx >= 0) {
                   if (pairs.length > 0) pairs[pairs.length - 1].a = seg.slice(0, nextQIdx).trim();
                   pairs.push({q: seg.slice(nextQIdx).trim(), a: ''});
