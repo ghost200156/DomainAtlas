@@ -1,6 +1,5 @@
 import { Link, useParams } from "react-router";
 
-import { demoApi } from "../lib/api";
 import { useRunPolling } from "../lib/useRunPolling";
 import { RunModeBadge } from "../RunModeBadge";
 
@@ -16,13 +15,8 @@ const STEP_INDEX = new Map(PIPELINE.map((item, index) => [item.step, index]));
 
 export default function ProgressRoute() {
   const { runId } = useParams();
-  const { run, error, setRun } = useRunPolling(runId);
+  const { run, error } = useRunPolling(runId);
   const currentIndex = run?.status === "READY" ? PIPELINE.length : (STEP_INDEX.get(run?.current_step ?? "") ?? -1);
-
-  async function retry() {
-    if (!runId) return;
-    setRun(await demoApi.retryRun(runId));
-  }
 
   return (
     <main className="progress-page page-width">

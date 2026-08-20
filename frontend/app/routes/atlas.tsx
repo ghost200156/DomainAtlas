@@ -41,22 +41,6 @@ export default function AtlasRoute() {
   useEffect(() => { localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(chatMessages)); }, [chatMessages, CHAT_STORAGE_KEY]);
 
   // ── Per-concept verify state ──
-  const [verifyState, setVerifyState] = useState<Record<string, { mode: boolean; text: string; result: { passed: boolean; feedback: string } | null; loading: boolean }>>({});
-  function getVerify(cid: string) {
-    return verifyState[cid] ?? { mode: false, text: "", result: null, loading: false };
-  }
-  function setVerify(cid: string, patch: Partial<ReturnType<typeof getVerify>>) {
-    setVerifyState((prev) => ({ ...prev, [cid]: { ...getVerify(cid), ...patch } }));
-  }
-  // Reset verify when closing concept
-  function resetVerify(cid: string) {
-    setVerifyState((prev) => {
-      const next = { ...prev };
-      delete next[cid];
-      return next;
-    });
-  }
-
   // ── Spoiler state for examples ──
   const [revealedExamples, setRevealedExamples] = useState<Set<string>>(new Set());
 
@@ -65,7 +49,6 @@ export default function AtlasRoute() {
   const [extraResults, setExtraResults] = useState<{ title: string; url: string; snippet: string; source: string }[]>([]);
   const searchResults = [...cachedResults, ...extraResults];
   const [searchLoading, setSearchLoading] = useState(false);
-  const lastSearchedCid = useRef("");
   // Load cached results from run data.  If none cached, auto-search.
   useEffect(() => {
     setExtraResults([]);
@@ -182,7 +165,6 @@ export default function AtlasRoute() {
   }
 
   const currentRunId = runId;
-  const learningOrder = atlasIndex.learningOrder;
   const frontierIds = new Set(
     [...unlockedConceptIds].filter((conceptId) => run.progress[conceptId] !== "understood"),
   );
@@ -241,32 +223,6 @@ export default function AtlasRoute() {
       setChatMessages((prev) => [...prev, { role: "tutor", text: "导师暂不可用，请重试。" }]);
     } finally {
       setChatLoading(false);
-    }
-  }
-
-  // ── Verify handlers (per-concept) ──
-  async function checkUnderstanding() {
-    if (!selected) return;
-    const cid = selected.id;
-    const v = getVerify(cid);
-    if (!v.text.trim() || v.loading) return;
-    setVerify(cid, { loading: true, result: null });
-    try {
-      const res = await fetch(`/api/runs/${runId}/concepts/${cid}/verify`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ explanation: v.text }),
-      });
-      const data = await res.json();
-      setVerify(cid, { result: data });
-      if (data.passed) {
-        setRun(await demoApi.updateProgress(currentRunId, cid, "understood"));
-      }
-    } catch {
-      setVerify(cid, { result: { passed: true, feedback: "验证暂不可用，已标记。" } });
-      setRun(await demoApi.updateProgress(currentRunId, cid, "understood"));
-    } finally {
-      setVerify(cid, { loading: false });
     }
   }
 
