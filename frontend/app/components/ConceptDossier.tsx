@@ -140,7 +140,7 @@ export function ConceptDossier({
                 const qid = selected.id + "-q" + idx;
                 const revealed = revealedExamples.has(qid);
                 return (
-                  <div key={idx} className="example-question">
+                  <div key={qid} className="example-question">
                     <div className="example-prompt" dangerouslySetInnerHTML={{ __html: renderMarkdown(pair.q) }} />
                     {pair.a ? (
                       <>
@@ -168,8 +168,8 @@ export function ConceptDossier({
             ) : null}
             {searchResults.length > 0 ? (
               <div className="search-results">
-                {searchResults.map((r, i) => (
-                  <a key={i} href={r.url} target="_blank" rel="noreferrer" className="search-result-item">
+                {searchResults.map((r) => (
+                  <a key={r.url} href={r.url} target="_blank" rel="noreferrer" className="search-result-item">
                     {r.isNew ? <span className="search-source">NEW</span> : null}
                     <b>{r.title}</b>
                     <p>{r.url}</p>

@@ -230,6 +230,7 @@ export function AtlasMap({
     }
     window.addEventListener("resize", onResize);
     return () => { cancelAnimationFrame(frame); window.removeEventListener("resize", onResize); };
+  // oxlint-disable-next-line react-hooks/exhaustive-deps -- intentional: depend on coordinates, not object reference
   }, [entryPosition?.x, entryPosition?.y, runId]);
 
   // ── Pan / zoom internals ──

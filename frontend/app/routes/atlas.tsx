@@ -49,27 +49,9 @@ export default function AtlasRoute() {
   const [extraResults, setExtraResults] = useState<{ title: string; url: string; snippet: string; source: string }[]>([]);
   const searchResults = [...cachedResults, ...extraResults];
   const [searchLoading, setSearchLoading] = useState(false);
-  // Load cached results from run data.  If none cached, auto-search.
-  useEffect(() => {
-    setExtraResults([]);
-    if (selectedId && run) {
-      const cached = (run as any)?.pre_search_results?.[selectedId];
-      if (Array.isArray(cached) && cached.length > 0) {
-        setCachedResults(cached);
-        setSearchLoading(false);
-      } else {
-        setCachedResults([]);
-        searchForSources();
-      }
-    } else {
-      setCachedResults([]);
-      setSearchLoading(false);
-    }
-  }, [selectedId, run]);
 
-  useEffect(() => {
-    setOpenedConceptIds(new Set());
-  }, [runId]);
+  // oxlint-disable-next-line react/set-state-in-effect
+  useEffect(() => { setOpenedConceptIds(new Set()); }, [runId]);
 
   const atlasIndex = useMemo((): AtlasIndex | null => {
     if (!atlas) return null;
@@ -138,14 +120,20 @@ export default function AtlasRoute() {
     });
   }, []);
 
-  const focusConcept = useCallback(
-    (conceptId: string, preferredScale = 0.9) => {
-      markConceptOpened(conceptId);
-      setSelectedId(conceptId);
-      mapRef.current?.panTo(conceptId, preferredScale);
-    },
-    [markConceptOpened],
-  );
+  function focusConcept(conceptId: string, preferredScale = 0.9) {
+    markConceptOpened(conceptId);
+    setSelectedId(conceptId);
+    mapRef.current?.panTo(conceptId, preferredScale);
+    setExtraResults([]);
+    const cached = (run as any)?.pre_search_results?.[conceptId];
+    if (Array.isArray(cached) && cached.length > 0) {
+      setCachedResults(cached);
+      setSearchLoading(false);
+    } else {
+      setCachedResults([]);
+      searchForSources(undefined, false, conceptId);
+    }
+  }
 
   const matchingConcepts = useMemo(() => {
     if (!atlas || !query.trim()) return [];
@@ -226,14 +214,14 @@ export default function AtlasRoute() {
     }
   }
 
-  async function searchForSources(query_text?: string, append = false) {
+  async function searchForSources(query_text?: string, append = false, forConceptId?: string) {
     if (searchLoading) return;
-    // Capture selected.id before the first await — it may change while the fetch is in flight
-    const conceptId = selected?.id;
+    const conceptId = forConceptId ?? selected?.id;
+    const concept = (forConceptId ? atlasIndex?.conceptsById.get(forConceptId) : selected) ?? selected;
     setSearchLoading(true);
     if (!append) { setCachedResults([]); setExtraResults([]); }
     try {
-      const msg = query_text || (selected ? `概念：${selected.name}\n定义：${selected.definition.slice(0, 500)}\n关键点：${selected.key_points.join('\n')}` : "");
+      const msg = query_text || (concept ? `概念：${concept.name}\n定义：${concept.definition.slice(0, 500)}\n关键点：${concept.key_points.join('\n')}` : "");
       if (!msg) { setSearchLoading(false); return; }
       const res = await fetch(`/api/runs/${runId}/recommend-sources`, {
         method: "POST",
@@ -397,6 +385,7 @@ export default function AtlasRoute() {
           </header>
           <div className="tutor-messages">
             {chatMessages.map((msg, i) => (
+              // oxlint-disable-next-line react/no-array-index-key -- append-only list, index is stable
               <div key={i} className={`tutor-msg tutor-msg-${msg.role}`}>
                 <b>{msg.role === "user" ? "你" : (run?.model_name || "AI")}</b>
                 <p style={{whiteSpace:"pre-wrap"}}>{msg.text}</p>
