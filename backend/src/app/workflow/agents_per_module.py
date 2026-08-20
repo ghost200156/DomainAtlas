@@ -27,6 +27,7 @@ from app.workflow.agents import (
     REVIEW_PATH_PROMPT,
     REVIEWER_PROMPT,
 )
+from app.schemas.agent_io import MiniConcept, ModuleConcepts
 
 logger = logging.getLogger(__name__)
 
@@ -153,17 +154,6 @@ class LiveAgentPipeline:
 
     async def _build_concepts(self, brief, module_id, module_title, module_purpose, core_questions, evidence=None):
         """Build concepts for one module."""
-        from pydantic import BaseModel as BM
-        from pydantic import Field as F
-        class MiniConcept(BM):
-            name: str = F(description="教学主题名")
-            definition: str = F(description="## 概念(直接定义)→## 机制(原理与边界)。术语**加粗**。120-220字")
-            why_it_matters: str = F(description="学会这个能做什么，一句话")
-            key_points: list[str] = F(description="恰好2条具体规则，每条不超过30字", min_length=2, max_length=2)
-            example: str = F(description="2-3道练习题；每题题干+【解】+答案，题间空行分隔；匹配当前领域形式")
-            evidence_ids: list[str] = F(default=[], description="本概念引用的 evidence ID，从上方参考证据中选取，没有则留空")
-        class ModuleConcepts(BM):
-            concepts: list[MiniConcept] = F(min_length=2, max_length=3)
 
         evidence_block = ""
         if evidence:
