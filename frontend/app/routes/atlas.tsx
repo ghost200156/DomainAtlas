@@ -1,4 +1,5 @@
 import {
+  type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent,
@@ -10,15 +11,12 @@ import {
 } from "react";
 import { Link, useParams } from "react-router";
 
-import { ConceptDossier } from "../components/atlas/ConceptDossier";
-import { GuardianGlyph } from "../components/atlas/GuardianGlyph";
-import { TutorPanel } from "../components/atlas/TutorPanel";
-import { cleanLabel, renderMarkdown, clamp, RELATION_LABELS } from "../components/atlas/atlasUtils";
 import { demoApi } from "../lib/api";
 import { useRunPolling } from "../lib/useRunPolling";
 import { RunModeBadge } from "../RunModeBadge";
 import "../atlas-v2.css";
 
+const LEADING_SYMBOLS = /^[^\p{L}\p{N}]+/u;
 const NODE_WIDTH = 170;
 const NODE_HEIGHT = 156;
 const CLUSTER_WIDTH = 760;
@@ -26,6 +24,14 @@ const CLUSTER_HEIGHT = 560;
 const MAP_TOP = 104;
 const MIN_SCALE = 0.15;
 const MAX_SCALE = 3.2;
+
+const RELATION_LABELS: Record<string, string> = {
+  enables: "促成",
+  constrains: "约束",
+  informs: "支撑",
+  evaluates: "检验",
+  depends_on: "依赖",
+};
 
 type ViewState = { x: number; y: number; scale: number };
 type DragState = {
@@ -35,6 +41,98 @@ type DragState = {
   viewX: number;
   viewY: number;
 };
+
+function cleanLabel(value: string) {
+  return value.replace(LEADING_SYMBOLS, "");
+}
+
+function renderMarkdown(text: string): string {
+  // Strip question number prefixes and convert markdown
+  let html = text
+    .replace(/^(?:题目?\d+|问题\d*)[：:．.\s]\s*/gm, '')
+    .replace(/```(\w*)\n([\s\S]*?)```/g, (_: string, _lang: string, code: string) =>
+      `<pre><code>${code.trim()}</code></pre>`)
+    .replace(/`([^`]+)`/g, '<code>$1</code>');
+  // ## Heading → <h4>
+  html = html.replace(/^## (.+)$/gm, '<h4 class="dossier-h4">$1</h4>');
+  // ### Sub-heading → <h5>
+  html = html.replace(/^### (.+)$/gm, '<h5 class="dossier-h5">$1</h5>');
+  // **bold** → <strong>
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  // Double newline = paragraph break, single newline = line break
+  html = html.replace(/\n{2,}/g, '</p><p>');
+  html = html.replace(/\n/g, '<br/>');
+  return `<p>${html}</p>`;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function GuardianGlyph({ variant, color, phase }: { variant: number; color: string; phase: number }) {
+  const style = {
+    "--guardian-color": color,
+    "--guardian-delay": `${-(phase % 7) * 0.63}s`,
+  } as CSSProperties;
+
+  if (variant === 0) {
+    return (
+      <g className="node-guardian guardian-moth" style={style}>
+        <path className="guardian-wing guardian-wing-left" d="M80 51C70 30 51 28 54 45C56 59 68 66 81 57Z" />
+        <path className="guardian-wing guardian-wing-right" d="M90 51C100 30 119 28 116 45C114 59 102 66 89 57Z" />
+        <ellipse className="guardian-body" cx="85" cy="52" rx="6" ry="18" />
+        <circle className="guardian-head" cx="85" cy="33" r="6" />
+        <path className="guardian-line" d="M82 29C77 22 72 23 70 18M88 29C93 22 98 23 100 18" />
+      </g>
+    );
+  }
+  if (variant === 1) {
+    return (
+      <g className="node-guardian guardian-fox" style={style}>
+        <path className="guardian-tail" d="M101 62C124 68 127 45 111 44C102 44 102 53 110 54" />
+        <ellipse className="guardian-body" cx="87" cy="59" rx="23" ry="14" />
+        <circle className="guardian-head" cx="68" cy="43" r="14" />
+        <path className="guardian-body" d="M57 34L59 20L68 31L78 20L80 36Z" />
+        <circle className="guardian-eye" cx="64" cy="42" r="2" />
+        <circle className="guardian-eye" cx="72" cy="42" r="2" />
+      </g>
+    );
+  }
+  if (variant === 2) {
+    return (
+      <g className="node-guardian guardian-jelly" style={style}>
+        <path className="guardian-body" d="M59 53C59 31 70 21 85 21C100 21 111 31 111 53C98 59 72 59 59 53Z" />
+        <circle className="guardian-eye" cx="77" cy="42" r="2.4" />
+        <circle className="guardian-eye" cx="93" cy="42" r="2.4" />
+        <path className="guardian-line guardian-tentacles" d="M68 55C64 65 72 68 68 78M80 57C76 68 84 70 80 82M92 57C88 68 96 70 92 82M103 55C99 64 106 68 102 77" />
+      </g>
+    );
+  }
+  if (variant === 3) {
+    return (
+      <g className="node-guardian guardian-owl" style={style}>
+        <ellipse className="guardian-body" cx="85" cy="53" rx="24" ry="29" />
+        <path className="guardian-wing guardian-wing-left" d="M65 45C50 50 52 66 70 69Z" />
+        <path className="guardian-wing guardian-wing-right" d="M105 45C120 50 118 66 100 69Z" />
+        <circle className="guardian-face" cx="76" cy="43" r="9" />
+        <circle className="guardian-face" cx="94" cy="43" r="9" />
+        <circle className="guardian-eye" cx="76" cy="43" r="3" />
+        <circle className="guardian-eye" cx="94" cy="43" r="3" />
+        <path className="guardian-beak" d="M82 49L85 55L88 49Z" />
+      </g>
+    );
+  }
+  return (
+    <g className="node-guardian guardian-deer" style={style}>
+      <ellipse className="guardian-body" cx="83" cy="60" rx="25" ry="14" />
+      <path className="guardian-line guardian-legs" d="M69 69L66 82M91 70L94 82" />
+      <path className="guardian-neck" d="M98 59C98 47 101 40 107 36" />
+      <ellipse className="guardian-head" cx="108" cy="33" rx="10" ry="8" />
+      <path className="guardian-line guardian-antlers" d="M105 27L100 18M101 23L95 21M111 27L116 18M115 23L121 21" />
+      <circle className="guardian-eye" cx="111" cy="32" r="1.8" />
+    </g>
+  );
+}
 
 export default function AtlasRoute() {
   const { runId } = useParams();
@@ -847,44 +945,196 @@ export default function AtlasRoute() {
       </nav>
 
       {selected ? (
-        <ConceptDossier
-          selected={selected}
-          selectedModule={selectedModule}
-          selectedRelations={selectedRelations}
-          run={run}
-          revealedExamples={revealedExamples}
-          searchLoading={searchLoading}
-          searchResults={searchResults}
-          closeButtonRef={closeButtonRef}
-          onClose={() => setSelectedId("")}
-          onMarkUnderstood={markUnderstood}
-          onFocusConcept={focusConcept}
-          onRevealToggle={(qid: string) => setRevealedExamples(prev => {
-            const next = new Set(prev);
-            if (next.has(qid)) next.delete(qid);
-            else next.add(qid);
-            return next;
-          })}
-          onOpenChat={() => {
-            setChatOpen(true);
-            if (selected && chatMessages.length === 0) {
-              setChatMessages([{role: "tutor" as const, text: `可以追问关于「${cleanLabel(selected.name)}」的任何细节。`}]);
+        <div className="dossier-layer" onMouseDown={(event) => {
+          if (event.target === event.currentTarget) setSelectedId("");
+        }}>
+        <aside
+          className="explorer-dossier"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="concept-title"
+          aria-describedby="concept-definition"
+          onKeyDown={keepFocusInDialog}
+        >
+          <i className="liquid-orb liquid-orb-one" aria-hidden="true" />
+          <i className="liquid-orb liquid-orb-two" aria-hidden="true" />
+          <button className="dossier-close" onClick={() => setSelectedId("")} aria-label="关闭概念详情" ref={closeButtonRef}>
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+              <path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+            </svg>
+          </button>
+          <div className="dossier-scroll">
+          <header className="dossier-hero">
+            <span className="module-chip"><i style={{ background: selectedModule?.color }} />{selectedModule ? cleanLabel(selectedModule.title) : "概念"}</span>
+            <h2 id="concept-title">{cleanLabel(selected.name)}</h2>
+          </header>
+
+          {/* ── Answer ── */}
+          <section className="dossier-answer">
+            <div dangerouslySetInnerHTML={{ __html: renderMarkdown(selected.definition) }} />
+          </section>
+
+          {/* ── Key points ── */}
+          {selected.key_points.length > 0 ? (
+            <section className="dossier-facts">
+              <ul>{selected.key_points.slice(0, 4).map((point) => <li key={point} dangerouslySetInnerHTML={{ __html: renderMarkdown(point) }} />)}</ul>
+            </section>
+          ) : null}
+
+          {/* ── Why it matters + example ── */}
+          <section className="dossier-why">
+            <div dangerouslySetInnerHTML={{ __html: renderMarkdown(selected.why_it_matters) }} />
+          </section>
+          {selected.example ? (() => {
+            const text = selected.example;
+            // Split by blank line before 【解】 markers
+            // Split into Q&A pairs: split by 【解】, pair questions with answers
+            const segments = text.split(/【解】/);
+            const pairs: {q: string, a: string}[] = [];
+            for (let i = 0; i < segments.length; i++) {
+              const seg = segments[i].trim();
+              if (!seg) continue;
+              if (i === 0) {
+                pairs.push({q: seg, a: ''});
+              } else {
+                // This segment contains: answer for previous Q + possibly next question
+                const nextQIdx = seg.search(/\n(?=题目?\d+|问题\d*[：:]|判断|代码|\d+\.)/);
+                if (nextQIdx >= 0) {
+                  if (pairs.length > 0) pairs[pairs.length - 1].a = seg.slice(0, nextQIdx).trim();
+                  pairs.push({q: seg.slice(nextQIdx).trim(), a: ''});
+                } else {
+                  if (pairs.length > 0) pairs[pairs.length - 1].a = seg;
+                }
+              }
             }
-          }}
-          onSearchMore={searchForSources}
-          onKeepFocusInDialog={keepFocusInDialog}
-        />
+            return (
+            <section className="dossier-example">
+              {pairs.map((pair, idx) => {
+                const qid = selected.id + '-q' + idx;
+                const revealed = revealedExamples.has(qid);
+                return (
+                  <div key={idx} className="example-question">
+                    <div className="example-prompt" dangerouslySetInnerHTML={{ __html: renderMarkdown(pair.q) }} />
+                    {pair.a ? (
+                      <>
+                      <button className="spoiler-toggle" onClick={() => {
+                        setRevealedExamples(prev => {
+                          const next = new Set(prev);
+                          if (next.has(qid)) next.delete(qid);
+                          else next.add(qid);
+                          return next;
+                        });
+                      }}>
+                        {revealed ? '▲ 收起解法' : '▶ 显示解法'}
+                      </button>
+                      {revealed ? (
+                        <div className="example-solution" dangerouslySetInnerHTML={{ __html: renderMarkdown(pair.a) }} />
+                      ) : null}
+                      </>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </section>
+            );
+          })() : null}
+
+          {/* ── Sources ── */}
+          <section className="dossier-evidence">
+            <h3>相关链接</h3>
+            {searchLoading && searchResults.length === 0 ? (
+              <p className="empty-detail">搜索中...</p>
+            ) : null}
+            {searchResults.length > 0 ? (
+              <div className="search-results">
+                {searchResults.map((r, i) => (
+                  <a key={i} href={r.url} target="_blank" rel="noreferrer" className="search-result-item">
+                    {(r as any).isNew ? <span className="search-source">NEW</span> : null}
+                    <b>{r.title}</b>
+                    <p>{r.url}</p>
+                  </a>
+                ))}
+              </div>
+            ) : !searchLoading ? (
+              <p className="empty-detail">正在加载来源...</p>
+            ) : null}
+            <button className="button button-small" onClick={() => {
+              if (selected) {
+                const msg = `概念：${cleanLabel(selected.name)}\n定义：${selected.definition.slice(0, 500)}\n关键点：${selected.key_points.join('；')}\n不要推荐之前已推荐过的URL。推荐具体知识点的页面，不要入门教程。`;
+                searchForSources(msg, true);
+              }
+            }} disabled={searchLoading} style={{marginTop:10}}>
+              {searchLoading ? "搜索中..." : "搜索更多链接"}
+            </button>
+          </section>
+
+          {/* ── Related ── */}
+          {selectedRelations.length > 0 ? (
+            <section className="dossier-related">
+              <h3>关联概念</h3>
+              <div className="explorer-relations">
+                {selectedRelations.map((relation) => {
+                  const otherId = relation.source_id === selected.id ? relation.target_id : relation.source_id;
+                  const other = atlasIndex.conceptsById.get(otherId);
+                  return (
+                    <button key={relation.id} onClick={() => other && focusConcept(other.id)}>
+                      <span>{RELATION_LABELS[relation.relation_type] ?? relation.relation_type}</span>
+                      <b>{other ? cleanLabel(other.name) : otherId}</b>
+                      <small>{relation.explanation}</small>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          ) : null}
+
+          {(selected.misconception || selected.uncertainty) ? (
+            <section className="dossier-notes">
+              {selected.misconception ? <div className="note"><b>误区</b><p>{selected.misconception}</p></div> : null}
+              {selected.uncertainty ? <div className="note"><b>不确定</b><p>{selected.uncertainty}</p></div> : null}
+            </section>
+          ) : null}
+          </div>
+
+          {/* ── Footer: mark understood (bottom-right) + ask AI ── */}
+          <footer className="dossier-footer">
+            <div className="dossier-actions">
+              {run.progress[selected.id] !== "understood" ? (
+                <button className="understood-button" onClick={markUnderstood}>标记为已理解</button>
+              ) : (
+                <span className="verify-passed">✓ 已理解</span>
+              )}
+              <button className="button button-small" onClick={() => {
+                setChatOpen(true);
+                if (selected && chatMessages.length === 0) {
+                  setChatMessages([{role: "tutor" as const, text: `可以追问关于「${cleanLabel(selected.name)}」的任何细节。`}]);
+                }
+              }}>💬 向AI提问</button>
+            </div>
+          </footer>
+        </aside>
+        </div>
       ) : null}
       {chatOpen ? (
-        <TutorPanel
-          messages={chatMessages}
-          input={chatInput}
-          loading={chatLoading}
-          modelName={run?.model_name}
-          onInputChange={setChatInput}
-          onSubmit={sendChatMessage}
-          onClose={() => setChatOpen(false)}
-        />
+        <aside className="tutor-panel">
+          <header className="tutor-header">
+            <h3>{run?.model_name || "AI"}</h3>
+            <button onClick={() => setChatOpen(false)} aria-label="关闭">×</button>
+          </header>
+          <div className="tutor-messages">
+            {chatMessages.map((msg, i) => (
+              <div key={i} className={`tutor-msg tutor-msg-${msg.role}`}>
+                <b>{msg.role === "user" ? "你" : (run?.model_name || "AI")}</b>
+                <p style={{whiteSpace:"pre-wrap"}}>{msg.text}</p>
+              </div>
+            ))}
+            {chatLoading ? <div className="tutor-msg tutor-msg-tutor"><b>{run?.model_name || "AI"}</b><p>...</p></div> : null}
+          </div>
+          <form className="tutor-input" onSubmit={(e) => { e.preventDefault(); sendChatMessage(); }}>
+            <input value={chatInput} onChange={e => setChatInput(e.target.value)} placeholder="输入问题..." disabled={chatLoading} />
+            <button type="submit" disabled={chatLoading || !chatInput.trim()}>发送</button>
+          </form>
+        </aside>
       ) : null}
     </main>
   );
