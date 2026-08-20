@@ -2,6 +2,7 @@ import asyncio
 import os
 from datetime import UTC, datetime
 from pathlib import Path
+from collections.abc import Callable
 
 from app.schemas.demo import DemoRun
 
@@ -26,6 +27,28 @@ class DemoStore:
             await asyncio.to_thread(temporary_path.write_text, payload, encoding="utf-8")
             await asyncio.to_thread(temporary_path.replace, path)
         return run
+
+    async def mutate(
+        self,
+        run_id: str,
+        callback: "Callable[[DemoRun], DemoRun | None]",
+    ) -> DemoRun:
+        async with self._lock:
+            path = self._path(run_id)
+            if not path.exists():
+                raise KeyError(run_id)
+            payload = await asyncio.to_thread(path.read_text, encoding="utf-8")
+            run = DemoRun.model_validate_json(payload)
+
+            result = callback(run)
+            updated = result if result is not None else run
+
+            updated.updated_at = datetime.now(UTC)
+            new_payload = updated.model_dump_json(indent=2)
+            tmp = path.with_suffix(".json.tmp")
+            await asyncio.to_thread(tmp.write_text, new_payload, encoding="utf-8")
+            await asyncio.to_thread(tmp.replace, path)
+        return updated
 
     async def get(self, run_id: str) -> DemoRun:
         path = self._path(run_id)
