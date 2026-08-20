@@ -11,7 +11,7 @@ import {
   useState,
 } from "react";
 
-import { type AtlasDocument, type ConceptNode } from "../lib/types";
+import { type AtlasDocument, type AtlasIndex } from "../lib/types";
 import { cleanLabel, clamp } from "../lib/atlasUtils";
 
 // ── Constants (map geometry) ────────────────────────────────────────────────
@@ -58,14 +58,7 @@ const STATIC_SVG_DEFS = (
 type ViewState = { x: number; y: number; scale: number };
 type DragState = { pointerId: number; startX: number; startY: number; viewX: number; viewY: number };
 
-export type AtlasIndex = {
-  conceptsById: Map<string, ConceptNode>;
-  modulesById: Map<string, { id: string; title: string; color: string; summary: string }>;
-  conceptsByModule: Map<string, ConceptNode[]>;
-  relationsByConcept: Map<string, { id: string; source_id: string; target_id: string; relation_type: string; explanation: string }[]>;
-  conceptOrder: Map<string, number>;
-  learningOrder: string[];
-};
+export type { AtlasIndex };
 
 export interface AtlasMapHandle {
   panTo(conceptId: string, preferredScale?: number): void;

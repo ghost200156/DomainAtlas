@@ -13,6 +13,7 @@ import { useRunPolling } from "../lib/useRunPolling";
 import { cleanLabel } from "../lib/atlasUtils";
 import { ConceptDossier, type EnrichedRelation } from "../components/ConceptDossier";
 import { AtlasMap, type AtlasMapHandle } from "../components/AtlasMap";
+import { type AtlasIndex } from "../lib/types";
 import { RunModeBadge } from "../RunModeBadge";
 import "../atlas-v2.css";
 
@@ -87,7 +88,7 @@ export default function AtlasRoute() {
     setOpenedConceptIds(new Set());
   }, [runId]);
 
-  const atlasIndex = useMemo(() => {
+  const atlasIndex = useMemo((): AtlasIndex | null => {
     if (!atlas) return null;
     const conceptsById = new Map(atlas.concepts.map((concept) => [concept.id, concept]));
     const modulesById = new Map(atlas.modules.map((module) => [module.id, module]));
@@ -105,26 +106,13 @@ export default function AtlasRoute() {
         ),
       ]),
     );
-    const evidenceById = new Map(
-      (run?.research_pack?.evidence ?? []).map((evidence) => [evidence.id, evidence]),
-    );
-    const sourcesById = new Map(atlas.sources.map((source) => [source.id, source]));
     const learningOrder = Array.from(new Set([
       ...atlas.learning_path.flatMap((stage) => stage.concept_ids),
       ...atlas.concepts.map((concept) => concept.id),
     ])).filter((conceptId) => conceptsById.has(conceptId));
     const conceptOrder = new Map(learningOrder.map((conceptId, index) => [conceptId, index + 1]));
-    return {
-      conceptsById,
-      modulesById,
-      conceptsByModule,
-      relationsByConcept,
-      evidenceById,
-      sourcesById,
-      conceptOrder,
-      learningOrder,
-    };
-  }, [atlas, run?.research_pack?.evidence]);
+    return { conceptsById, modulesById, conceptsByModule, relationsByConcept, conceptOrder, learningOrder };
+  }, [atlas]);
 
   const unlockedConceptIds = useMemo(() => {
     if (!atlasIndex) return new Set<string>();
@@ -219,16 +207,7 @@ export default function AtlasRoute() {
           };
         })
     : [];
-  const selectedEvidence = (selected?.evidence_ids ?? [])
-    .map((evidenceId) => atlasIndex.evidenceById.get(evidenceId))
-    .filter((item) => item !== undefined);
-  const selectedMechanisms = selected
-    ? atlas.mechanisms.filter((item) => item.concept_ids.includes(selected.id))
-    : [];
-  const selectedCases = selected
-    ? atlas.cases.filter((item) => item.concept_ids.includes(selected.id))
-    : [];
-  const understood = Object.values(run.progress).filter((state) => state === "understood").length;
+  const understood =Object.values(run.progress).filter((state) => state === "understood").length;
   const progressPercent = Math.round((understood / atlas.concepts.length) * 100);
   const visibleMatches = new Set(matchingConcepts.map((concept) => concept.id));
 
