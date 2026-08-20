@@ -46,7 +46,7 @@ class DemoOrchestrator:
             and self.settings.openai_api_key != "demo-not-configured"
         )
 
-    def _pipeline(self) -> LiveAgentPipeline:
+    def pipeline(self) -> LiveAgentPipeline:
         if self._live_pipeline is None:
             self._live_pipeline = LiveAgentPipeline(
                 self.settings,
@@ -122,7 +122,7 @@ class DemoOrchestrator:
             run = await self.store.get(run_id)
             if self._can_run_live():
                 try:
-                    output = await self._pipeline().plan(run.brief)
+                    output = await self.pipeline().plan(run.brief)
                     run.calibration = output.calibration
                     run.plan = output.plan
                     run.execution_mode = "live"
@@ -210,7 +210,7 @@ class DemoOrchestrator:
                 candidate = None
                 for attempt in range(3):
                     try:
-                        candidate = await self._pipeline().build_atlas(
+                        candidate = await self.pipeline().build_atlas(
                             run.brief, run.plan, run.research_pack)
                         break
                     except Exception as error:
@@ -264,7 +264,7 @@ class DemoOrchestrator:
             async def search_one(concept):
                 msg = f"概念：{concept.name}\n定义：{concept.definition[:300]}\n关键点：{'；'.join(concept.key_points[:2])}"
                 try:
-                    text = await self._pipeline()._run_text(
+                    text = await self.pipeline()._run_text(
                         f"根据概念内容推荐2个网页链接。返回JSON数组[{{\"title\":\"标题\",\"url\":\"URL\"}}]。只输出JSON。\n\n{msg}",
                         "只输出JSON数组。")
                     import json as _json

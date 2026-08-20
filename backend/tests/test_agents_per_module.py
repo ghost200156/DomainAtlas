@@ -1,6 +1,8 @@
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
 from app.core.config import Settings
 from app.schemas.demo import (
     ConceptNode,
@@ -176,8 +178,9 @@ def test_build_atlas_isolates_module_and_overview_failures(monkeypatch) -> None:
             for concept in atlas.concepts
             if concept.module_id != "__center__"
         }
-        assert set(module_concepts) == {module.id for module in plan.modules}
-        assert module_concepts[failed_module.id].definition.endswith("生成暂时不可用，请刷新重试。")
+        assert set(module_concepts) == {
+            module.id for module in plan.modules if module.id != failed_module.id
+        }
         assert atlas.concepts[0].definition == plan.domain_definition
 
     asyncio.run(scenario())
@@ -218,13 +221,17 @@ def test_agent_methods_pass_their_own_model_settings(monkeypatch) -> None:
     async def scenario() -> None:
         await pipeline._run(object, "structured", "structured prompt")
         await pipeline._run_text("short text prompt")
-        await pipeline._build_concepts(
-            make_brief(),
-            "module-a",
-            "模块 A",
-            "模块用途",
-            ["核心问题"],
-        )
+        with pytest.raises(
+            RuntimeError,
+            match="concept generation failed after 2 attempts",
+        ):
+            await pipeline._build_concepts(
+                make_brief(),
+                "module-a",
+                "模块 A",
+                "模块用途",
+                ["核心问题"],
+            )
 
     asyncio.run(scenario())
     assert captured_settings[0] is pipeline.structured_settings
@@ -240,7 +247,7 @@ def test_agent_methods_pass_their_own_model_settings(monkeypatch) -> None:
     assert "【解】" in captured_system_prompts[2]
 
 
-def test_build_concepts_retries_twice_then_falls_back(monkeypatch) -> None:
+def test_build_concepts_retries_twice_then_raises_last_error(monkeypatch) -> None:
     brief = make_brief()
     pipeline = object.__new__(agents_per_module.LiveAgentPipeline)
     pipeline.model = object()
@@ -270,19 +277,46 @@ def test_build_concepts_retries_twice_then_falls_back(monkeypatch) -> None:
     monkeypatch.setattr(agents_per_module.asyncio, "sleep", no_sleep)
 
     async def scenario() -> None:
-        concepts = await pipeline._build_concepts(
-            brief,
-            "module-a",
-            "模块 A",
-            "模块用途",
-            ["核心问题"],
-        )
-        assert len(concepts) == 1
-        assert concepts[0].definition.endswith("生成暂时不可用，请刷新重试。")
+        with pytest.raises(
+            RuntimeError,
+            match="Module module-a concept generation failed after 2 attempts",
+        ) as exc_info:
+            await pipeline._build_concepts(
+                brief,
+                "module-a",
+                "模块 A",
+                "模块用途",
+                ["核心问题"],
+            )
+        assert isinstance(exc_info.value.__cause__, TimeoutError)
 
     asyncio.run(scenario())
     assert calls == 2
     assert sleeps == [2]
+
+
+def test_build_atlas_raises_when_all_modules_fail(monkeypatch) -> None:
+    brief = make_brief()
+    plan = make_plan(brief)
+    research_pack = make_research_pack(plan)
+    pipeline = object.__new__(agents_per_module.LiveAgentPipeline)
+
+    async def build_concepts(*args, **kwargs):
+        raise RuntimeError("module provider failure")
+
+    async def run_text(_prompt, _sys_prompt):
+        return "overview"
+
+    monkeypatch.setattr(pipeline, "_build_concepts", build_concepts)
+    monkeypatch.setattr(pipeline, "_run_text", run_text)
+
+    async def scenario() -> None:
+        failed_modules = [module.id for module in plan.modules]
+        with pytest.raises(RuntimeError) as exc_info:
+            await pipeline.build_atlas(brief, plan, research_pack)
+        assert str(exc_info.value) == f"All modules failed: {failed_modules}"
+
+    asyncio.run(scenario())
 
 
 def test_generate_atlas_stops_after_three_attempts(monkeypatch, tmp_path) -> None:
@@ -318,7 +352,7 @@ def test_generate_atlas_stops_after_three_attempts(monkeypatch, tmp_path) -> Non
         store = DemoStore(tmp_path)
         orchestrator = DemoOrchestrator(store, delay_seconds=0, agent_mode="live")
         monkeypatch.setattr(orchestrator, "_can_run_live", lambda: True)
-        monkeypatch.setattr(orchestrator, "_pipeline", lambda: FailingPipeline())
+        monkeypatch.setattr(orchestrator, "pipeline", lambda: FailingPipeline())
         monkeypatch.setattr(orchestrator, "finish_atlas", no_finish)
         run = DemoRun(
             id="retry-limit",
@@ -336,6 +370,37 @@ def test_generate_atlas_stops_after_three_attempts(monkeypatch, tmp_path) -> Non
     asyncio.run(scenario())
     assert attempts == 3
     assert sleeps == [2, 2]
+
+
+def test_finish_atlas_fails_without_real_concepts(tmp_path) -> None:
+    brief = make_brief()
+    plan = make_plan(brief)
+    research_pack = make_research_pack(plan)
+    atlas = make_atlas(brief, plan, research_pack)
+    atlas.concepts = [
+        concept for concept in atlas.concepts if concept.module_id == "__center__"
+    ]
+
+    async def scenario() -> None:
+        store = DemoStore(tmp_path)
+        orchestrator = DemoOrchestrator(store, delay_seconds=0, agent_mode="fixture")
+        run = DemoRun(
+            id="no-real-concepts",
+            status=RunStatus.GENERATING,
+            brief=brief,
+            plan=plan,
+            research_pack=research_pack,
+            atlas=atlas,
+        )
+        await store.save(run)
+
+        await orchestrator.finish_atlas(run.id)
+
+        failed = await store.get(run.id)
+        assert failed.status == RunStatus.FAILED
+        assert failed.current_step == "publishing"
+
+    asyncio.run(scenario())
 
 
 def test_generate_atlas_persists_multi_source_enrichment_before_reload(
@@ -387,7 +452,7 @@ def test_generate_atlas_persists_multi_source_enrichment_before_reload(
         store = DemoStore(tmp_path)
         orchestrator = DemoOrchestrator(store, delay_seconds=0, agent_mode="live")
         monkeypatch.setattr(orchestrator, "_can_run_live", lambda: True)
-        monkeypatch.setattr(orchestrator, "_pipeline", lambda: CapturingPipeline())
+        monkeypatch.setattr(orchestrator, "pipeline", lambda: CapturingPipeline())
         monkeypatch.setattr(orchestrator, "finish_atlas", no_finish)
         run = DemoRun(
             id="persist-enrichment",
