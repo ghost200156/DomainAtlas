@@ -110,7 +110,7 @@ def test_empty_model_atlas_is_rejected_before_publish() -> None:
     issues = validate_atlas(atlas, research_pack)
 
     assert "Atlas must contain at least three modules" in issues
-    assert "Atlas must contain at least 24 concepts" in issues
+    assert "Atlas must contain at least 6 concepts" in issues
     assert "Atlas must retain its controlled research sources" in issues
 
 
