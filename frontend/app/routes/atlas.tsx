@@ -998,7 +998,7 @@ export default function AtlasRoute() {
                 pairs.push({q: seg, a: ''});
               } else {
                 // This segment contains: answer for previous Q + possibly next question
-                const nextQIdx = seg.search(/\n(?=题目?\d|判断|代码|\d+\.)/);
+                const nextQIdx = seg.search(/\n(?=题目?\d+|问题\d*[：:]|判断|代码|\d+\.)/);
                 if (nextQIdx >= 0) {
                   if (pairs.length > 0) pairs[pairs.length - 1].a = seg.slice(0, nextQIdx).trim();
                   pairs.push({q: seg.slice(nextQIdx).trim(), a: ''});
