@@ -49,7 +49,7 @@ function cleanLabel(value: string) {
 function renderMarkdown(text: string): string {
   // Strip question number prefixes and convert markdown
   let html = text
-    .replace(/^题目?\d+[：:．.\s]\s*/gm, '')
+    .replace(/^(?:题目?\d+|问题\d*)[：:．.\s]\s*/gm, '')
     .replace(/```(\w*)\n([\s\S]*?)```/g, (_: string, _lang: string, code: string) =>
       `<pre><code>${code.trim()}</code></pre>`)
     .replace(/`([^`]+)`/g, '<code>$1</code>');
