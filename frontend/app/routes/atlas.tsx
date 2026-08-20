@@ -13,10 +13,11 @@ import { Link, useParams } from "react-router";
 
 import { demoApi } from "../lib/api";
 import { useRunPolling } from "../lib/useRunPolling";
+import { cleanLabel, clamp } from "../lib/atlasUtils";
+import { ConceptDossier, type EnrichedRelation } from "../components/ConceptDossier";
 import { RunModeBadge } from "../RunModeBadge";
 import "../atlas-v2.css";
 
-const LEADING_SYMBOLS = /^[^\p{L}\p{N}]+/u;
 const NODE_WIDTH = 170;
 const NODE_HEIGHT = 156;
 const CLUSTER_WIDTH = 760;
@@ -25,13 +26,37 @@ const MAP_TOP = 104;
 const MIN_SCALE = 0.15;
 const MAX_SCALE = 3.2;
 
-const RELATION_LABELS: Record<string, string> = {
-  enables: "促成",
-  constrains: "约束",
-  informs: "支撑",
-  evaluates: "检验",
-  depends_on: "依赖",
-};
+// Static SVG defs hoisted out of the component — no dynamic props, never need to re-render
+const STATIC_SVG_DEFS = (
+  <defs>
+    <marker id="arrow-muted" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0L8 4L0 8Z" fill="#8494b5" />
+    </marker>
+    <marker id="arrow-active" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0L8 4L0 8Z" fill="#5154dc" />
+    </marker>
+    <linearGradient id="fog-fill" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stopColor="#f4f7fc" stopOpacity=".96" />
+      <stop offset=".52" stopColor="#dfe6f1" stopOpacity=".94" />
+      <stop offset="1" stopColor="#cbd5e5" stopOpacity=".9" />
+    </linearGradient>
+    <radialGradient id="clearing-fill">
+      <stop offset="0" stopColor="#eef3fb" stopOpacity=".7" />
+      <stop offset=".64" stopColor="#eef3fb" stopOpacity=".5" />
+      <stop offset="1" stopColor="#eef3fb" stopOpacity="0" />
+    </radialGradient>
+    <radialGradient id="mist-light-fill">
+      <stop offset="0" stopColor="#ffffff" stopOpacity=".42" />
+      <stop offset=".62" stopColor="#ffffff" stopOpacity=".18" />
+      <stop offset="1" stopColor="#ffffff" stopOpacity="0" />
+    </radialGradient>
+    <radialGradient id="mist-shadow-fill">
+      <stop offset="0" stopColor="#aebbd2" stopOpacity=".25" />
+      <stop offset=".58" stopColor="#b8c4d8" stopOpacity=".1" />
+      <stop offset="1" stopColor="#c5cede" stopOpacity="0" />
+    </radialGradient>
+  </defs>
+);
 
 type ViewState = { x: number; y: number; scale: number };
 type DragState = {
@@ -42,32 +67,6 @@ type DragState = {
   viewY: number;
 };
 
-function cleanLabel(value: string) {
-  return value.replace(LEADING_SYMBOLS, "");
-}
-
-function renderMarkdown(text: string): string {
-  // Strip question number prefixes and convert markdown
-  let html = text
-    .replace(/^(?:题目?\d+|问题\d*)[：:．.\s]\s*/gm, '')
-    .replace(/```(\w*)\n([\s\S]*?)```/g, (_: string, _lang: string, code: string) =>
-      `<pre><code>${code.trim()}</code></pre>`)
-    .replace(/`([^`]+)`/g, '<code>$1</code>');
-  // ## Heading → <h4>
-  html = html.replace(/^## (.+)$/gm, '<h4 class="dossier-h4">$1</h4>');
-  // ### Sub-heading → <h5>
-  html = html.replace(/^### (.+)$/gm, '<h5 class="dossier-h5">$1</h5>');
-  // **bold** → <strong>
-  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  // Double newline = paragraph break, single newline = line break
-  html = html.replace(/\n{2,}/g, '</p><p>');
-  html = html.replace(/\n/g, '<br/>');
-  return `<p>${html}</p>`;
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
 
 function GuardianGlyph({ variant, color, phase }: { variant: number; color: string; phase: number }) {
   const style = {
@@ -513,11 +512,23 @@ export default function AtlasRoute() {
   const unlockedCount = unlockedConceptIds.size;
   const selected = selectedId ? atlasIndex.conceptsById.get(selectedId) : undefined;
   const selectedModule = selected ? atlasIndex.modulesById.get(selected.module_id) : undefined;
-  const selectedRelations = selected
-    ? (atlasIndex.relationsByConcept.get(selected.id) ?? []).filter((relation) => {
-        const otherId = relation.source_id === selected.id ? relation.target_id : relation.source_id;
-        return unlockedConceptIds.has(otherId);
-      })
+  const selectedRelations: EnrichedRelation[] = selected
+    ? (atlasIndex.relationsByConcept.get(selected.id) ?? [])
+        .filter((relation) => {
+          const otherId = relation.source_id === selected.id ? relation.target_id : relation.source_id;
+          return unlockedConceptIds.has(otherId);
+        })
+        .map((relation) => {
+          const otherId = relation.source_id === selected.id ? relation.target_id : relation.source_id;
+          const other = atlasIndex.conceptsById.get(otherId);
+          return {
+            id: relation.id,
+            otherId,
+            otherName: other ? other.name : otherId,
+            relation_type: relation.relation_type,
+            explanation: relation.explanation,
+          };
+        })
     : [];
   const selectedEvidence = (selected?.evidence_ids ?? [])
     .map((evidenceId) => atlasIndex.evidenceById.get(evidenceId))
@@ -594,10 +605,11 @@ export default function AtlasRoute() {
 
   async function searchForSources(query_text?: string, append = false) {
     if (searchLoading) return;
+    // Capture selected.id before the first await — it may change while the fetch is in flight
+    const conceptId = selected?.id;
     setSearchLoading(true);
     if (!append) { setCachedResults([]); setExtraResults([]); }
     try {
-      // Use concept-specific content as context for AI
       const msg = query_text || (selected ? `概念：${selected.name}\n定义：${selected.definition.slice(0, 500)}\n关键点：${selected.key_points.join('\n')}` : "");
       if (!msg) { setSearchLoading(false); return; }
       const res = await fetch(`/api/runs/${runId}/recommend-sources`, {
@@ -612,11 +624,10 @@ export default function AtlasRoute() {
             setExtraResults(prev => [...prev, ...data.map((r: any) => ({...r, source: 'NEW', isNew: true}))]);
           } else {
             setCachedResults(data);
-            // Persist to local cache so the concept won't need re-searching
-            if (selected) {
+            if (conceptId) {
               setRun((prev: any) => prev ? {
                 ...prev,
-                pre_search_results: { ...(prev.pre_search_results ?? {}), [selected.id]: data },
+                pre_search_results: { ...(prev.pre_search_results ?? {}), [conceptId]: data },
               } : prev);
             }
           }
@@ -713,33 +724,8 @@ export default function AtlasRoute() {
             ref={viewportRef}
           >
             <svg className="atlas-stage" viewBox={`0 0 ${layout.width} ${layout.height}`} preserveAspectRatio="xMid yMid meet" aria-label="SVG 矢量知识地图">
+              {STATIC_SVG_DEFS}
               <defs>
-                <marker id="arrow-muted" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
-                  <path d="M0 0L8 4L0 8Z" fill="#8494b5" />
-                </marker>
-                <marker id="arrow-active" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
-                  <path d="M0 0L8 4L0 8Z" fill="#5154dc" />
-                </marker>
-                <linearGradient id="fog-fill" x1="0" y1="0" x2="1" y2="1">
-                  <stop offset="0" stopColor="#f4f7fc" stopOpacity=".96" />
-                  <stop offset=".52" stopColor="#dfe6f1" stopOpacity=".94" />
-                  <stop offset="1" stopColor="#cbd5e5" stopOpacity=".9" />
-                </linearGradient>
-                <radialGradient id="clearing-fill">
-                  <stop offset="0" stopColor="#eef3fb" stopOpacity=".7" />
-                  <stop offset=".64" stopColor="#eef3fb" stopOpacity=".5" />
-                  <stop offset="1" stopColor="#eef3fb" stopOpacity="0" />
-                </radialGradient>
-                <radialGradient id="mist-light-fill">
-                  <stop offset="0" stopColor="#ffffff" stopOpacity=".42" />
-                  <stop offset=".62" stopColor="#ffffff" stopOpacity=".18" />
-                  <stop offset="1" stopColor="#ffffff" stopOpacity="0" />
-                </radialGradient>
-                <radialGradient id="mist-shadow-fill">
-                  <stop offset="0" stopColor="#aebbd2" stopOpacity=".25" />
-                  <stop offset=".58" stopColor="#b8c4d8" stopOpacity=".1" />
-                  <stop offset="1" stopColor="#c5cede" stopOpacity="0" />
-                </radialGradient>
                 {atlas.modules.map((module, moduleIndex) => (
                   <radialGradient id={`module-field-${moduleIndex}`} key={module.id}>
                     <stop offset="0" stopColor={module.color} stopOpacity=".16" />
@@ -945,175 +931,33 @@ export default function AtlasRoute() {
       </nav>
 
       {selected ? (
-        <div className="dossier-layer" onMouseDown={(event) => {
-          if (event.target === event.currentTarget) setSelectedId("");
-        }}>
-        <aside
-          className="explorer-dossier"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="concept-title"
-          aria-describedby="concept-definition"
-          onKeyDown={keepFocusInDialog}
-        >
-          <i className="liquid-orb liquid-orb-one" aria-hidden="true" />
-          <i className="liquid-orb liquid-orb-two" aria-hidden="true" />
-          <button className="dossier-close" onClick={() => setSelectedId("")} aria-label="关闭概念详情" ref={closeButtonRef}>
-            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
-              <path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
-            </svg>
-          </button>
-          <div className="dossier-scroll">
-          <header className="dossier-hero">
-            <span className="module-chip"><i style={{ background: selectedModule?.color }} />{selectedModule ? cleanLabel(selectedModule.title) : "概念"}</span>
-            <h2 id="concept-title">{cleanLabel(selected.name)}</h2>
-          </header>
-
-          {/* ── Answer ── */}
-          <section className="dossier-answer">
-            <div dangerouslySetInnerHTML={{ __html: renderMarkdown(selected.definition) }} />
-          </section>
-
-          {/* ── Key points ── */}
-          {selected.key_points.length > 0 ? (
-            <section className="dossier-facts">
-              <ul>{selected.key_points.slice(0, 4).map((point) => <li key={point} dangerouslySetInnerHTML={{ __html: renderMarkdown(point) }} />)}</ul>
-            </section>
-          ) : null}
-
-          {/* ── Why it matters + example ── */}
-          <section className="dossier-why">
-            <div dangerouslySetInnerHTML={{ __html: renderMarkdown(selected.why_it_matters) }} />
-          </section>
-          {selected.example ? (() => {
-            const text = selected.example;
-            // Split by blank line before 【解】 markers
-            // Split into Q&A pairs: split by 【解】, pair questions with answers
-            const segments = text.split(/【解】/);
-            const pairs: {q: string, a: string}[] = [];
-            for (let i = 0; i < segments.length; i++) {
-              const seg = segments[i].trim();
-              if (!seg) continue;
-              if (i === 0) {
-                pairs.push({q: seg, a: ''});
-              } else {
-                // This segment contains: answer for previous Q + possibly next question
-                const nextQIdx = seg.search(/\n(?=题目?\d+|问题\d*[：:]|判断|代码|\d+\.)/);
-                if (nextQIdx >= 0) {
-                  if (pairs.length > 0) pairs[pairs.length - 1].a = seg.slice(0, nextQIdx).trim();
-                  pairs.push({q: seg.slice(nextQIdx).trim(), a: ''});
-                } else {
-                  if (pairs.length > 0) pairs[pairs.length - 1].a = seg;
-                }
-              }
+        <ConceptDossier
+          selected={selected}
+          selectedModule={selectedModule}
+          selectedRelations={selectedRelations}
+          run={run}
+          revealedExamples={revealedExamples}
+          searchLoading={searchLoading}
+          searchResults={searchResults}
+          closeButtonRef={closeButtonRef}
+          onClose={() => setSelectedId("")}
+          onMarkUnderstood={markUnderstood}
+          onFocusConcept={(id) => focusConcept(id)}
+          onRevealToggle={(qid) => setRevealedExamples(prev => {
+            const next = new Set(prev);
+            if (next.has(qid)) next.delete(qid);
+            else next.add(qid);
+            return next;
+          })}
+          onSearchMore={(msg, append) => searchForSources(msg, append)}
+          onOpenChat={() => {
+            setChatOpen(true);
+            if (chatMessages.length === 0) {
+              setChatMessages([{ role: "tutor" as const, text: `可以追问关于「${cleanLabel(selected.name)}」的任何细节。` }]);
             }
-            return (
-            <section className="dossier-example">
-              {pairs.map((pair, idx) => {
-                const qid = selected.id + '-q' + idx;
-                const revealed = revealedExamples.has(qid);
-                return (
-                  <div key={idx} className="example-question">
-                    <div className="example-prompt" dangerouslySetInnerHTML={{ __html: renderMarkdown(pair.q) }} />
-                    {pair.a ? (
-                      <>
-                      <button className="spoiler-toggle" onClick={() => {
-                        setRevealedExamples(prev => {
-                          const next = new Set(prev);
-                          if (next.has(qid)) next.delete(qid);
-                          else next.add(qid);
-                          return next;
-                        });
-                      }}>
-                        {revealed ? '▲ 收起解法' : '▶ 显示解法'}
-                      </button>
-                      {revealed ? (
-                        <div className="example-solution" dangerouslySetInnerHTML={{ __html: renderMarkdown(pair.a) }} />
-                      ) : null}
-                      </>
-                    ) : null}
-                  </div>
-                );
-              })}
-            </section>
-            );
-          })() : null}
-
-          {/* ── Sources ── */}
-          <section className="dossier-evidence">
-            <h3>相关链接</h3>
-            {searchLoading && searchResults.length === 0 ? (
-              <p className="empty-detail">搜索中...</p>
-            ) : null}
-            {searchResults.length > 0 ? (
-              <div className="search-results">
-                {searchResults.map((r, i) => (
-                  <a key={i} href={r.url} target="_blank" rel="noreferrer" className="search-result-item">
-                    {(r as any).isNew ? <span className="search-source">NEW</span> : null}
-                    <b>{r.title}</b>
-                    <p>{r.url}</p>
-                  </a>
-                ))}
-              </div>
-            ) : !searchLoading ? (
-              <p className="empty-detail">正在加载来源...</p>
-            ) : null}
-            <button className="button button-small" onClick={() => {
-              if (selected) {
-                const msg = `概念：${cleanLabel(selected.name)}\n定义：${selected.definition.slice(0, 500)}\n关键点：${selected.key_points.join('；')}\n不要推荐之前已推荐过的URL。推荐具体知识点的页面，不要入门教程。`;
-                searchForSources(msg, true);
-              }
-            }} disabled={searchLoading} style={{marginTop:10}}>
-              {searchLoading ? "搜索中..." : "搜索更多链接"}
-            </button>
-          </section>
-
-          {/* ── Related ── */}
-          {selectedRelations.length > 0 ? (
-            <section className="dossier-related">
-              <h3>关联概念</h3>
-              <div className="explorer-relations">
-                {selectedRelations.map((relation) => {
-                  const otherId = relation.source_id === selected.id ? relation.target_id : relation.source_id;
-                  const other = atlasIndex.conceptsById.get(otherId);
-                  return (
-                    <button key={relation.id} onClick={() => other && focusConcept(other.id)}>
-                      <span>{RELATION_LABELS[relation.relation_type] ?? relation.relation_type}</span>
-                      <b>{other ? cleanLabel(other.name) : otherId}</b>
-                      <small>{relation.explanation}</small>
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
-          ) : null}
-
-          {(selected.misconception || selected.uncertainty) ? (
-            <section className="dossier-notes">
-              {selected.misconception ? <div className="note"><b>误区</b><p>{selected.misconception}</p></div> : null}
-              {selected.uncertainty ? <div className="note"><b>不确定</b><p>{selected.uncertainty}</p></div> : null}
-            </section>
-          ) : null}
-          </div>
-
-          {/* ── Footer: mark understood (bottom-right) + ask AI ── */}
-          <footer className="dossier-footer">
-            <div className="dossier-actions">
-              {run.progress[selected.id] !== "understood" ? (
-                <button className="understood-button" onClick={markUnderstood}>标记为已理解</button>
-              ) : (
-                <span className="verify-passed">✓ 已理解</span>
-              )}
-              <button className="button button-small" onClick={() => {
-                setChatOpen(true);
-                if (selected && chatMessages.length === 0) {
-                  setChatMessages([{role: "tutor" as const, text: `可以追问关于「${cleanLabel(selected.name)}」的任何细节。`}]);
-                }
-              }}>💬 向AI提问</button>
-            </div>
-          </footer>
-        </aside>
-        </div>
+          }}
+          onKeepFocusInDialog={keepFocusInDialog}
+        />
       ) : null}
       {chatOpen ? (
         <aside className="tutor-panel">
