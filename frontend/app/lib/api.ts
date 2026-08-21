@@ -4,6 +4,7 @@ import type {
   FrameworkPlan,
   LearningBrief,
 } from "./types";
+import type { SourceSearchResult } from "./atlas/types";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8000/api";
 
@@ -46,5 +47,20 @@ export const demoApi = {
     request<AssessmentFeedback>(`/runs/${runId}/assessments/${assessmentId}`, {
       method: "POST",
       body: JSON.stringify({ answer }),
+    }),
+  tutor: (runId: string, message: string) =>
+    request<{ reply: string }>(`/runs/${runId}/tutor`, {
+      method: "POST",
+      body: JSON.stringify({ message }),
+    }),
+  verifyConcept: (runId: string, conceptId: string, explanation: string) =>
+    request<{ passed: boolean; feedback: string }>(`/runs/${runId}/concepts/${conceptId}/verify`, {
+      method: "POST",
+      body: JSON.stringify({ explanation }),
+    }),
+  recommendSources: (runId: string, message: string) =>
+    request<SourceSearchResult[]>(`/runs/${runId}/recommend-sources`, {
+      method: "POST",
+      body: JSON.stringify({ message }),
     }),
 };
