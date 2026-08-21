@@ -174,3 +174,11 @@ export type AtlasIndex = {
   conceptOrder: Map<string, number>;
   learningOrder: string[];
 };
+
+export type SourceSearchResult = {
+  id?: string;
+  title: string;
+  url: string;
+  snippet: string;
+  source: string;
+};
