@@ -1,8 +1,8 @@
 import asyncio
 import logging
 
-from app.schemas.demo import DemoError, RunEvent, RunStatus
 from app.core.config import Settings, get_settings
+from app.schemas.demo import DemoError, RunEvent, RunStatus
 from app.store import DemoStore
 from app.workflow.agents_per_module import LiveAgentPipeline
 from app.workflow.fixtures import (
@@ -197,6 +197,7 @@ class DemoOrchestrator:
                                 message=f"多来源搜索补充了 {len(extra_sources)} 个来源和 {len(extra_evidence)} 条证据。",
                             )
                         )
+                        await self.store.save(run)
                 except Exception:
                     logger.warning("Multi-source search failed; continuing with primary research only.", exc_info=True)
 
@@ -207,16 +208,23 @@ class DemoOrchestrator:
                 raise RuntimeError("生成 Atlas 所需的中间产物不完整")
             if self._can_run_live():
                 candidate = None
-                for attempt in range(10):
+                for attempt in range(3):
                     try:
                         candidate = await self._pipeline().build_atlas(
                             run.brief, run.plan, run.research_pack)
                         break
                     except Exception as error:
-                        logger.warning("Atlas attempt %d failed: %s, retrying...", attempt + 1, error)
-                        await asyncio.sleep(3)
+                        if attempt < 2:
+                            logger.warning(
+                                "Atlas attempt %d/3 failed: %s; retrying in 2s",
+                                attempt + 1,
+                                error,
+                            )
+                            await asyncio.sleep(2)
+                        else:
+                            logger.error("Atlas attempt 3/3 failed: %s", error)
                 if candidate is None:
-                    raise RuntimeError("Atlas generation failed after 10 attempts")
+                    raise RuntimeError("Atlas generation failed after 3 attempts")
                 atlas_issues = validate_atlas(candidate, run.research_pack)
                 if atlas_issues:
                     logger.warning("Atlas validation: %s", "；".join(atlas_issues))
