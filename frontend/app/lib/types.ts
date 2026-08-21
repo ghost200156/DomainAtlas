@@ -165,3 +165,20 @@ export type AssessmentFeedback = {
   feedback: string;
   review_concept_ids: string[];
 };
+
+export type AtlasIndex = {
+  conceptsById: Map<string, ConceptNode>;
+  modulesById: Map<string, AtlasModule>;
+  conceptsByModule: Map<string, ConceptNode[]>;
+  relationsByConcept: Map<string, AtlasDocument["relations"][number][]>;
+  conceptOrder: Map<string, number>;
+  learningOrder: string[];
+};
+
+export type SourceSearchResult = {
+  id?: string;
+  title: string;
+  url: string;
+  snippet: string;
+  source: string;
+};
