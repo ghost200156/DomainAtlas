@@ -67,7 +67,7 @@ def validate_atlas(
         module_id: sum(concept.module_id == module_id for concept in atlas.concepts if concept.module_id)
         for module_id in module_ids
     }
-    if any(count < 4 for count in concept_count_by_module.values()):
+    if any(count < 2 for count in concept_count_by_module.values()):
         issues.append("Every Atlas module must contain at least two concepts")
     if any(not concept.key_points for concept in atlas.concepts):
         issues.append("Every concept must include key points")

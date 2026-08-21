@@ -1,10 +1,10 @@
-"""Simplified per-module pipeline. Never fails."""
+"""Simplified per-module pipeline."""
 from __future__ import annotations
 
 import asyncio
 import json as _json
 import logging
-from pydantic import BaseModel
+
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
@@ -152,7 +152,7 @@ class LiveAgentPipeline:
         return await self._run(ResearchPack, self._prompt_for("domainatlas-research", RESEARCH_PROMPT), prompt)
 
     async def _build_concepts(self, brief, module_id, module_title, module_purpose, core_questions, evidence=None):
-        """Pydantic structured output. Fallback to plain text. Never fails."""
+        """Build concepts for one module."""
         from pydantic import BaseModel as BM
         from pydantic import Field as F
         class MiniConcept(BM):
@@ -171,6 +171,7 @@ class LiveAgentPipeline:
             evidence_block = "\n\n参考证据（请在 evidence_ids 中引用相关条目的 ID）：\n" + "\n".join(lines)
         prompt = "领域：" + brief.domain + " 学习者：" + brief.learner_background + " 模块：" + module_title + "（" + module_purpose + "）核心问题：" + str(core_questions) + evidence_block
         items = []
+        last_error = None
         for attempt in range(2):
             try:
                 agent = Agent(self.model, output_type=ModuleConcepts,
@@ -180,7 +181,9 @@ class LiveAgentPipeline:
                 items = output.concepts if output.concepts else []
                 if items:
                     break
+                raise RuntimeError("Concept generation returned no concepts")
             except Exception as error:
+                last_error = error
                 logger.warning(
                     "Module %s concept attempt %d/2 failed: %s",
                     module_id,
@@ -191,7 +194,9 @@ class LiveAgentPipeline:
                 await asyncio.sleep(2)
 
         if not items:
-            return self._fallback_concepts(module_id, module_title, module_purpose)
+            raise RuntimeError(
+                f"Module {module_id} concept generation failed after 2 attempts"
+            ) from last_error
 
         concepts = []
         for i, item in enumerate(items):
@@ -204,19 +209,6 @@ class LiveAgentPipeline:
                 evidence_ids=item.evidence_ids or [],
             ))
         return concepts
-
-    @staticmethod
-    def _fallback_concepts(module_id, module_title, module_purpose):
-        return [ConceptNode(
-            id=module_id + "-c0",
-            module_id=module_id,
-            name=module_title[:100],
-            definition="## 概念\n" + module_purpose + "\n\n## 机制\n生成暂时不可用，请刷新重试。",
-            why_it_matters="",
-            key_points=[],
-            example=None,
-            evidence_ids=[],
-        )]
 
     async def build_atlas(self, brief, plan, research_pack):
         evidence_by_module: dict[str, list] = {}
@@ -240,19 +232,25 @@ class LiveAgentPipeline:
         concept_results = results[:-1]
         center_text_raw = results[-1]
         all_concepts = []
+        failed_modules = []
         for m, result in zip(plan.modules, concept_results):
             if isinstance(result, asyncio.CancelledError):
                 raise result
             if isinstance(result, Exception) or not isinstance(result, list) or not result:
-                if isinstance(result, Exception):
-                    logger.warning("Module %s generation failed; using fallback: %s", m.id, result)
-                else:
-                    logger.warning("Module %s returned an invalid concept result; using fallback", m.id)
-                cs = self._fallback_concepts(m.id, m.title, m.purpose)
-            else:
-                cs = result
-            all_concepts.extend(cs)
-            logger.info("Module %s: %d concepts", m.id, len(cs))
+                failed_modules.append(m.id)
+                try:
+                    if isinstance(result, Exception):
+                        raise result
+                    raise RuntimeError("Module returned an invalid concept result")
+                except Exception:
+                    logger.error("Module %s generation failed", m.id, exc_info=True)
+                continue
+            all_concepts.extend(result)
+            logger.info("Module %s: %d concepts", m.id, len(result))
+        if failed_modules:
+            logger.warning("Failed modules: %s", failed_modules)
+        if not all_concepts:
+            raise RuntimeError(f"All modules failed: {failed_modules}")
         colors = ["#2f7f73", "#4e7896", "#d49a45", "#e46f46", "#776a9b", "#6d8b55"]
         atlas_mods = [AtlasModule(id=m.id, title=m.title, summary=m.purpose, color=colors[i % 6]) for i, m in enumerate(plan.modules)]
         overview = AtlasOverview(
