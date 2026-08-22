@@ -2,23 +2,25 @@ import asyncio
 import logging
 
 from app.core.config import Settings, get_settings
-from app.schemas.demo import DemoError, RunEvent, RunStatus
+from app.schemas.demo import (
+    AtlasDocument,
+    AtlasModule,
+    AtlasOverview,
+    ConceptNode,
+    ConceptRelation,
+    DemoError,
+    RunEvent,
+    RunStatus,
+)
 from app.store import DemoStore
 from app.workflow.agents_per_module import LiveAgentPipeline
 from app.workflow.fixtures import (
-    make_atlas,
     make_calibration,
     make_plan,
-    make_quality_report,
     make_research_pack,
 )
-from app.workflow.research import build_research_candidates, search_multi_source
-from app.workflow.validator import (
-    repair_atlas_references,
-    validate_atlas,
-    validate_plan,
-    validate_research_pack,
-)
+from app.workflow.research import build_research_candidates
+from app.workflow.validator import validate_plan
 
 logger = logging.getLogger(__name__)
 
@@ -155,173 +157,290 @@ class DemoOrchestrator:
         except Exception as error:
             await self._fail(run_id, step, error)
 
-    async def generate_atlas(self, run_id: str) -> None:
-        step = "researching"
-        try:
-            await self._checkpoint(run_id, step, "Research Agent 正在整理证据卡片。")
-            run = await self.store.get(run_id)
-            if run.plan is None:
-                raise RuntimeError("缺少已确认的框架计划")
-            fixture_pack = make_research_pack(run.plan)
-            candidate_pack = (
-                await build_research_candidates(
-                    run.brief.domain,
-                    run.plan,
-                    fixture_pack,
+    def init_empty_atlas(self, run) -> AtlasDocument:
+        """Build an empty atlas: modules from the plan + a center overview node."""
+        colors = ["#2f7f73", "#4e7896", "#d49a45", "#e46f46", "#776a9b", "#6d8b55"]
+        atlas_mods = [
+            AtlasModule(id=m.id, title=m.title, summary=m.purpose, color=colors[i % 6])
+            for i, m in enumerate(run.plan.modules)
+        ]
+        overview = AtlasOverview(
+            definition=run.plan.domain_definition,
+            boundary=run.plan.scope,
+            essential_question="如何在" + str(run.brief.learning_time_minutes) + "分钟内理解" + run.brief.domain + "？",
+            key_takeaways=[m.title for m in run.plan.modules[:4]],
+        )
+        center = ConceptNode(
+            id="__center__",
+            module_id="__center__",
+            name=run.brief.domain,
+            definition=run.plan.domain_definition[:500],
+            why_it_matters=run.brief.desired_outcome,
+            key_points=(run.plan.completion_criteria if run.plan.completion_criteria else [])[:5],
+            example=None,
+            evidence_ids=[],
+        )
+        return AtlasDocument(
+            title=run.brief.domain + " · 学习地图",
+            overview=overview,
+            modules=atlas_mods,
+            concepts=[center],
+            relations=[],
+            mechanisms=[],
+            cases=[],
+            learning_path=[],
+            assessments=[],
+            sources=[],
+            gaps=[],
+        )
+
+    def _next_chapter(self, run):
+        """Return the next chapter (module) without a lesson node, or None."""
+        grown = {c.module_id for c in run.atlas.concepts if c.module_id != "__center__"}
+        for module in run.plan.modules:
+            if module.id not in grown:
+                return module
+        return None
+
+    async def save_node(self, run_id: str, question: str, answer: str) -> DemoRun:
+        """Turn a teaching-session Q&A into a reusable node and add it to the map."""
+        run = await self.store.get(run_id)
+        if run.atlas is None:
+            run.atlas = self.init_empty_atlas(run)
+            await self.store.save(run)
+        node_id = "custom-" + str(len(run.atlas.concepts))
+        if self._can_run_live():
+            try:
+                concept = await self.pipeline().grow_custom_node(run.brief, question, answer, node_id)
+            except Exception as error:
+                logger.warning("grow_custom_node failed: %s", error)
+                concept = ConceptNode(
+                    id=node_id, module_id="__center__", section_type="custom",
+                    name=question[:40], definition=answer[:2000], why_it_matters="", key_points=[], quiz=[],
                 )
+        else:
+            concept = ConceptNode(
+                id=node_id, module_id="__center__", section_type="custom",
+                name=question[:40], definition=answer[:2000], why_it_matters="", key_points=[], quiz=[],
+            )
+        run.atlas.concepts.append(concept)
+        run.atlas.relations.append(
+            ConceptRelation(
+                id="r" + str(len(run.atlas.relations)),
+                source_id="__center__",
+                target_id=concept.id,
+                relation_type="informs",
+                explanation="",
+            )
+        )
+        run.events.append(
+            RunEvent(id=len(run.events) + 1, type="node_grown", step="growing", message=f"从问答生成节点：{concept.name}")
+        )
+        await self.store.save(run)
+        return run
+
+    async def expand_node(self, run_id: str, concept_id: str, question: str) -> dict:
+        """Deepen a concept: explain the learner's confusion point, quiz it, and
+        auto-save the resulting sub-node (linked from the parent concept)."""
+        run = await self.store.get(run_id)
+        if run.atlas is None:
+            run.atlas = self.init_empty_atlas(run)
+            await self.store.save(run)
+        parent = next((c for c in run.atlas.concepts if c.id == concept_id), None)
+        node_id = "expand-" + str(len(run.atlas.concepts))
+        concept = None
+        if self._can_run_live():
+            try:
+                concept = await self.pipeline().grow_custom_node(run.brief, question, "", node_id)
+            except Exception as error:
+                logger.warning("expand_node grow_custom_node failed: %s", error)
+        if concept is None:
+            concept = ConceptNode(
+                id=node_id, module_id="__center__", section_type="custom",
+                name=question[:40], definition=question[:500], why_it_matters="", key_points=[], quiz=[],
+            )
+        concept.module_id = parent.module_id if parent else "__center__"
+        run.atlas.concepts.append(concept)
+        run.progress[concept.id] = "understood"
+        run.atlas.relations.append(
+            ConceptRelation(
+                id="r" + str(len(run.atlas.relations)),
+                source_id=parent.id if parent else "__center__",
+                target_id=concept.id,
+                relation_type="informs",
+                explanation="",
+            )
+        )
+        run.events.append(
+            RunEvent(id=len(run.events) + 1, type="node_grown", step="growing", message=f"拓展生成节点：{concept.name}")
+        )
+        await self.store.save(run)
+        return {
+            "reply": concept.definition,
+            "quiz": concept.quiz or [],
+            "node_name": concept.name,
+            "node_id": concept.id,
+            "run": run,
+        }
+
+    async def chat(self, run_id: str, question: str, history: list) -> dict:
+        """Answer a question; the agent may summarize the prior segment into a node."""
+        run = await self.store.get(run_id)
+        if run.atlas is None:
+            run.atlas = self.init_empty_atlas(run)
+            await self.store.save(run)
+        if self._can_run_live():
+            try:
+                result = await self.pipeline().chat(run.brief, run.atlas, question, history)
+            except Exception as error:
+                logger.warning("chat failed: %s", error)
+                result = None
+        else:
+            result = None
+        if result is None:
+            return {"reply": "（模型暂时不可用，请稍后重试。）", "node_name": None, "node_definition": ""}
+        node_name = result.node_name if result.summarize else None
+        node_definition = result.node_definition if result.summarize else ""
+        return {"reply": result.reply, "node_name": node_name, "node_definition": node_definition}
+
+    async def persist_node(self, run_id: str, name: str, definition: str) -> DemoRun:
+        """Persist a user-approved node (from a chat/review summary)."""
+        run = await self.store.get(run_id)
+        if run.atlas is None:
+            run.atlas = self.init_empty_atlas(run)
+            await self.store.save(run)
+        node_id = "custom-" + str(len(run.atlas.concepts))
+        concept = ConceptNode(
+            id=node_id, module_id="__center__", section_type="custom",
+            name=name[:100], definition=definition[:4000], why_it_matters="", key_points=[], quiz=[],
+        )
+        run.atlas.concepts.append(concept)
+        run.progress[concept.id] = "understood"
+        run.atlas.relations.append(
+            ConceptRelation(
+                id="r" + str(len(run.atlas.relations)),
+                source_id="__center__",
+                target_id=concept.id,
+                relation_type="informs",
+                explanation="",
+            )
+        )
+        run.events.append(
+            RunEvent(id=len(run.events) + 1, type="node_grown", step="growing", message=f"整理成节点：{concept.name}")
+        )
+        await self.store.save(run)
+        return run
+
+    async def review_questions(self, run_id: str, concept_id: str) -> dict:
+        """Generate practice questions for a weak concept (no node yet)."""
+        run = await self.store.get(run_id)
+        if run.atlas is None:
+            raise ValueError("Atlas 尚未生成")
+        concept = next((c for c in run.atlas.concepts if c.id == concept_id), None)
+        if concept is None:
+            raise ValueError("没有找到这个概念")
+        knowledge, questions = "", []
+        if self._can_run_live():
+            try:
+                result = await self.pipeline().review_questions(run.brief, concept)
+                knowledge = result.get("knowledge", "")
+                questions = result.get("questions", [])
+            except Exception as error:
+                logger.warning("review_questions failed: %s", error)
+        return {"concept_name": concept.name, "knowledge": knowledge, "questions": questions}
+
+    async def save_review(self, run_id: str, concept_id: str, concept_name: str, questions: list) -> DemoRun:
+        """Persist an answered review as a node (deduped per concept)."""
+        run = await self.store.get(run_id)
+        if run.atlas is None:
+            run.atlas = self.init_empty_atlas(run)
+            await self.store.save(run)
+        review_id = concept_id + "-review"
+        if any(c.id == review_id for c in run.atlas.concepts):
+            return run
+        module_id = next((c.module_id for c in run.atlas.concepts if c.id == concept_id), "__center__")
+        node = ConceptNode(
+            id=review_id, module_id=module_id, section_type="review",
+            name="复习：" + concept_name[:60],
+            definition="## 复习\n针对你之前答错的点，再来几道：",
+            quiz=questions or [],
+        )
+        run.atlas.concepts.append(node)
+        run.progress[node.id] = "understood"
+        run.atlas.relations.append(
+            ConceptRelation(
+                id="r" + str(len(run.atlas.relations)),
+                source_id=concept_id,
+                target_id=node.id,
+                relation_type="evaluates",
+                explanation="",
+            )
+        )
+        run.events.append(
+            RunEvent(id=len(run.events) + 1, type="node_grown", step="growing", message=f"复习总结成节点：{node.name}")
+        )
+        await self.store.save(run)
+        return run
+
+    async def _grow_lesson_node(self, run, module) -> ConceptNode:
+        evidence = [e for e in run.research_pack.evidence if e.module_id == module.id]
+        if self._can_run_live():
+            try:
+                return await self.pipeline().grow_lesson(run.brief, module, evidence, run.plan)
+            except Exception as error:
+                logger.warning("grow_lesson failed: %s; using fallback", error)
+                return self._fallback_lesson(module, error)
+        return self._fallback_lesson(module)
+
+    def _fallback_lesson(self, module, error: Exception | None = None) -> ConceptNode:
+        err = f"：{error}" if error else ""
+        return ConceptNode(
+            id=module.id, module_id=module.id, section_type="concept",
+            name=module.title,
+            definition=f"## 概念\n{module.purpose}\n\n## 机制\n（模型暂时不可用{err}）",
+            why_it_matters="", key_points=[], quiz=[],
+        )
+
+    async def grow_node(self, run_id: str) -> DemoRun:
+        """Generate one complete lesson node for the next chapter (teach-style)."""
+        run = await self.store.get(run_id)
+        if run.plan is None:
+            raise ValueError("缺少已确认的框架计划")
+        if run.atlas is None:
+            run.atlas = self.init_empty_atlas(run)
+            await self.store.save(run)
+
+        if run.research_pack is None:
+            fixture_pack = make_research_pack(run.plan)
+            run.research_pack = (
+                await build_research_candidates(run.brief.domain, run.plan, fixture_pack)
                 if self._can_run_live()
                 else fixture_pack
             )
-            # Use candidates directly — skip slow Research agent for v0.1
-            run.research_pack = candidate_pack
-            issues = validate_research_pack(run.research_pack, run.plan)
-            if issues:
-                raise RuntimeError("；".join(issues))
             await self.store.save(run)
 
-            # Optional: enrich research with multi-source search
-            if self._can_run_live() and run.plan is not None:
-                try:
-                    extra_sources, extra_evidence = await search_multi_source(
-                        run.brief.domain,
-                        run.plan,
-                    )
-                    if extra_sources or extra_evidence:
-                        run.research_pack.sources.extend(extra_sources)
-                        run.research_pack.evidence.extend(extra_evidence)
-                        run.events.append(
-                            RunEvent(
-                                id=len(run.events) + 1,
-                                type="progress",
-                                step="researching",
-                                message=f"多来源搜索补充了 {len(extra_sources)} 个来源和 {len(extra_evidence)} 条证据。",
-                            )
-                        )
-                        await self.store.save(run)
-                except Exception:
-                    logger.warning("Multi-source search failed; continuing with primary research only.", exc_info=True)
-
-            step = "building_structure"
-            await self._checkpoint(run_id, step, "Atlas Agent 正在建立概念与关系。")
-            run = await self.store.get(run_id)
-            if run.plan is None or run.research_pack is None:
-                raise RuntimeError("生成 Atlas 所需的中间产物不完整")
-            if self._can_run_live():
-                candidate = None
-                for attempt in range(3):
-                    try:
-                        candidate = await self.pipeline().build_atlas(
-                            run.brief, run.plan, run.research_pack)
-                        break
-                    except Exception as error:
-                        if attempt < 2:
-                            logger.warning(
-                                "Atlas attempt %d/3 failed: %s; retrying in 2s",
-                                attempt + 1,
-                                error,
-                                exc_info=True,
-                            )
-                            await asyncio.sleep(2)
-                        else:
-                            logger.error(
-                                "Atlas attempt 3/3 failed: %s",
-                                error,
-                                exc_info=True,
-                            )
-                if candidate is None:
-                    raise RuntimeError("Atlas generation failed after 3 attempts")
-                atlas_issues = validate_atlas(candidate, run.research_pack)
-                if atlas_issues:
-                    run.events.append(
-                        RunEvent(
-                            id=len(run.events) + 1,
-                            type="warning",
-                            step="validating",
-                            message="校验提示：" + "；".join(atlas_issues[:3]),
-                        )
-                    )
-                run.atlas = candidate
-                run.execution_mode = "live"
-            else:
-                run.atlas = make_atlas(run.brief, run.plan, run.research_pack)
+        module = self._next_chapter(run)
+        if module is None:
+            run.growth_complete = True
+            run.events.append(
+                RunEvent(id=len(run.events) + 1, type="growth_complete", step="growing", message="已学完，地图生长结束。")
+            )
             await self.store.save(run)
+            return run
 
-            await self.finish_atlas(run_id)
-        except Exception as error:
-            await self._fail(run_id, step, error)
-
-    async def _pre_search_all_sources(self, run_id: str) -> None:
-        """Background task: pre-search source links for all concepts in parallel batches."""
-        try:
-            run = await self.store.get(run_id)
-            if not run.atlas:
-                return
-            seen_urls = set()
-            all_results: dict[str, list[dict]] = {}
-            concepts = run.atlas.concepts
-            batch_size = 4
-
-            async def search_one(concept):
-                msg = f"概念：{concept.name}\n定义：{concept.definition[:300]}\n关键点：{'；'.join(concept.key_points[:2])}"
-                try:
-                    text = await self.pipeline()._run_text(
-                        f"根据概念内容推荐2个网页链接。返回JSON数组[{{\"title\":\"标题\",\"url\":\"URL\"}}]。只输出JSON。\n\n{msg}",
-                        "只输出JSON数组。")
-                    import json as _json
-                    text = text.strip()
-                    if text.startswith("```"): text = text.split("\n", 1)[1].rsplit("\n```", 1)[0]
-                    results = _json.loads(text) if text.strip().startswith('[') else []
-                    return concept.id, results[:2]
-                except Exception:
-                    return concept.id, []
-
-            for i in range(0, len(concepts), batch_size):
-                batch = concepts[i:i + batch_size]
-                tasks = [search_one(c) for c in batch]
-                batch_results = await asyncio.gather(*tasks)
-                for cid, results in batch_results:
-                    filtered = [r for r in results if r.get('url') and r['url'] not in seen_urls]
-                    for r in filtered: seen_urls.add(r['url'])
-                    all_results[cid] = filtered[:2]
-                # Save incrementally so results are available even if not all done
-                run = await self.store.get(run_id)
-                run.pre_search_results = all_results  # type: ignore
-                await self.store.save(run)
-
-            logger.info("Pre-searched sources for %d concepts", len(all_results))
-        except Exception as e:
-            logger.warning("Pre-search failed: %s", e)
-
-    async def finish_atlas(self, run_id: str) -> None:
-        try:
-            run = await self.store.get(run_id)
-            if run.atlas is None:
-                raise RuntimeError("Atlas 尚未生成")
-            # Validate but never block
-            try:
-                repairs = repair_atlas_references(run.atlas, run.research_pack)
-                if repairs:
-                    run.events.append(RunEvent(id=len(run.events)+1, type="reference_repair", step="validating", message=f"修复了 {len(repairs)} 处引用"))
-                issues = validate_atlas(run.atlas, run.research_pack)
-                if issues:
-                    run.fallback_notes.append(f"校验提示：{'；'.join(issues[:3])}")
-            except Exception as ve:
-                logger.warning("Validation error (non-blocking): %s", ve)
-            run.quality_report = make_quality_report()
-            # Publish immediately
-            real_concepts = [
-                concept
-                for concept in run.atlas.concepts
-                if concept.module_id != "__center__"
-            ]
-            if not real_concepts:
-                raise RuntimeError("Atlas has no real concepts; marking as failed")
-            run.status = RunStatus.READY
-            run.current_step = "ready"
-            run.events.append(RunEvent(id=len(run.events)+1, type="atlas_ready", step="ready", message="领域地图已经可以探索。"))
-            await self.store.save(run)
-
-            # Background: pre-search source links for all concepts
-            asyncio.create_task(self._pre_search_all_sources(run_id))
-        except Exception as error:
-            await self._fail(run_id, "publishing", error)
+        concept = await self._grow_lesson_node(run, module)
+        run.atlas.concepts.append(concept)
+        run.atlas.relations.append(
+            ConceptRelation(
+                id="r" + str(len(run.atlas.relations)),
+                source_id="__center__",
+                target_id=concept.id,
+                relation_type="informs",
+                explanation="",
+            )
+        )
+        run.events.append(
+            RunEvent(id=len(run.events) + 1, type="node_grown", step="growing", message=f"生成章节：{concept.name}")
+        )
+        await self.store.save(run)
+        return run

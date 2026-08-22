@@ -11,6 +11,7 @@ from app.skills import SkillRegistry
 from app.store import DemoStore
 from app.workflow.orchestrator import DemoOrchestrator
 from app.workflow.task_registry import TaskRegistry
+from app.workflow.teaching import StudyController
 
 configure_logging()
 settings = get_settings()
@@ -26,6 +27,10 @@ async def lifespan(app: FastAPI):
     app.state.orchestrator = DemoOrchestrator(
         app.state.store,
         skill_registry=app.state.skill_registry,
+    )
+    app.state.controller = StudyController(
+        app.state.store,
+        app.state.orchestrator.pipeline(),
     )
     app.state.tasks = TaskRegistry()
     yield

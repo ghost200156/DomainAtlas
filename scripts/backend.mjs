@@ -17,6 +17,9 @@ if (!existsSync(pythonPath)) {
 const child = spawn(pythonPath, process.argv.slice(2), {
   cwd: backendDir,
   stdio: "inherit",
+  // UTF-8 mode: FastAPI CLI (Rich) prints emoji on startup, which crashes
+  // on GBK-encoded Windows consoles (cp936). PEP 540 UTF-8 mode avoids this.
+  env: { ...process.env, PYTHONUTF8: "1" },
 });
 
 for (const signal of ["SIGINT", "SIGTERM"]) {

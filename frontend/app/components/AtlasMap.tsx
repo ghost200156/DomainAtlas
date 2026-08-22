@@ -18,10 +18,17 @@ import { cleanLabel, clamp } from "../lib/atlasUtils";
 const NODE_WIDTH = 170;
 const NODE_HEIGHT = 156;
 const CLUSTER_WIDTH = 760;
-const CLUSTER_HEIGHT = 560;
-const MAP_TOP = 104;
 const MIN_SCALE = 0.15;
 const MAX_SCALE = 3.2;
+// The scale the map opens at is treated as the "100%" baseline in the readout.
+const DEFAULT_SCALE = 1.8;
+
+// Decorative fog contours, scattered pseudo-randomly across the map.
+const FOG_SPOTS: [number, number][] = [
+  [0.12, 0.18], [0.34, 0.09], [0.58, 0.22], [0.82, 0.14],
+  [0.22, 0.48], [0.5, 0.42], [0.78, 0.52], [0.38, 0.72],
+  [0.68, 0.78], [0.1, 0.82], [0.88, 0.8], [0.3, 0.3],
+];
 
 const STATIC_SVG_DEFS = (
   <defs>
@@ -62,7 +69,6 @@ export type { AtlasIndex };
 
 export interface AtlasMapHandle {
   panTo(conceptId: string, preferredScale?: number): void;
-  fitMap(): void;
 }
 
 export interface AtlasMapProps {
@@ -158,15 +164,15 @@ export function AtlasMap({
 
   // ── Layout computation (only needed inside the map) ──
   const layout = useMemo(() => {
-    const columns = Math.min(3, Math.max(2, Math.ceil(Math.sqrt(atlas.modules.length))));
-    const rows = Math.ceil(atlas.modules.length / columns);
-    const size = Math.max(1080, columns * CLUSTER_WIDTH + 80, MAP_TOP + rows * CLUSTER_HEIGHT + 68);
+    // Ring layout: the radius grows gently with the module count, then caps so the
+    // center node stays close to the rest of the map instead of drifting away.
+    const ringR = Math.max(300, Math.min(760, atlas.modules.length * 95));
+    const size = Math.max(1080, (ringR + CLUSTER_WIDTH) * 2 + 80);
     const width = size;
     const height = size;
     const positions = new Map<string, { x: number; y: number }>();
     const modulePositions = new Map<string, { x: number; y: number }>();
     const cx = width / 2, cy = height / 2;
-    const ringR = Math.min(width, height) / 4.5;
 
     atlas.modules.forEach((module, moduleIndex) => {
       const rawConcepts = atlasIndex.conceptsByModule.get(module.id) ?? [];
@@ -178,7 +184,7 @@ export function AtlasMap({
       const cosA = Math.cos(angle);
       const sinA = Math.sin(angle);
       const SPREAD = (Math.PI * 2) / 3;
-      const DIST = 260;
+      const DIST = Math.max(220, ringR * 0.5);
       concepts.forEach((concept, i) => {
         if (i === 0) {
           positions.set(concept.id, { x: clusterX - NODE_WIDTH / 2, y: clusterY - NODE_HEIGHT / 2 });
@@ -199,6 +205,16 @@ export function AtlasMap({
     if (atlas.concepts[0]?.id === "__center__") {
       positions.set(atlas.concepts[0].id, { x: cx - NODE_WIDTH / 2, y: cy - NODE_HEIGHT / 2 });
     }
+    // Position orphan concepts (e.g. user-generated custom/review nodes) around the center.
+    const orphans = atlas.concepts.filter((c) => c.id !== "__center__" && !positions.has(c.id));
+    orphans.forEach((concept, i) => {
+      const angle = (i / Math.max(1, orphans.length)) * 2 * Math.PI - Math.PI / 2;
+      const r = Math.min(width, height) / 3.2;
+      positions.set(concept.id, {
+        x: cx + Math.cos(angle) * r - NODE_WIDTH / 2,
+        y: cy + Math.sin(angle) * r - NODE_HEIGHT / 2,
+      });
+    });
     return { width, height, positions, modulePositions };
   }, [atlas, atlasIndex]);
 
@@ -211,11 +227,11 @@ export function AtlasMap({
     function centerEntry() {
       const viewport = viewportRef.current;
       if (!viewport || !entryPosition) return;
-      const scale = 1.14;
+      const scale = DEFAULT_SCALE;
       setView({
         scale,
-        x: viewport.clientWidth / 2 - (entryPosition.x + NODE_WIDTH / 2) * scale,
-        y: viewport.clientHeight / 2 - (entryPosition.y + NODE_HEIGHT / 2) * scale + 26,
+        x: layout.width / 2 - (entryPosition.x + NODE_WIDTH / 2) * scale,
+        y: layout.height / 2 - (entryPosition.y + NODE_HEIGHT / 2) * scale,
       });
     }
     let frame = requestAnimationFrame(centerEntry);
@@ -234,28 +250,20 @@ export function AtlasMap({
   }, [entryPosition?.x, entryPosition?.y, runId]);
 
   // ── Pan / zoom internals ──
-  const fitToViewport = useCallback((minimumScale: number) => {
-    const viewport = viewportRef.current;
-    if (!viewport) return;
+
+  // Reset the map to the default zoom (100%) centered on the center node.
+  const resetView = useCallback(() => {
     const centerPos = layout.positions.get("__center__");
     const ccx = centerPos ? centerPos.x + NODE_WIDTH / 2 : layout.width / 2;
     const ccy = centerPos ? centerPos.y + NODE_HEIGHT / 2 : layout.height / 2;
-    let maxDist = 300;
-    atlas.concepts.forEach((c) => {
-      if (!unlockedConceptIds.has(c.id)) return;
-      const p = layout.positions.get(c.id);
-      if (p) maxDist = Math.max(maxDist, ccx - p.x, p.x + NODE_WIDTH - ccx, ccy - p.y, p.y + NODE_HEIGHT - ccy);
-    });
-    const needed = maxDist * 2 - 100;
-    const scale = clamp(Math.min((viewport.clientWidth - 72) / needed, (viewport.clientHeight - 120) / needed), minimumScale, 1);
-    setView({ scale, x: viewport.clientWidth / 2 - ccx * scale + 100, y: viewport.clientHeight / 2 - ccy * scale + 20 });
-  }, [layout, atlas, unlockedConceptIds]);
+    setView({ scale: DEFAULT_SCALE, x: layout.width / 2 - ccx * DEFAULT_SCALE, y: layout.height / 2 - ccy * DEFAULT_SCALE });
+  }, [layout]);
 
   function zoomBy(factor: number) {
     const viewport = viewportRef.current;
     if (!viewport) return;
-    const cx = viewport.clientWidth / 2;
-    const cy = viewport.clientHeight / 2;
+    const cx = layout.width / 2;
+    const cy = layout.height / 2;
     setView((cur) => {
       const scale = clamp(cur.scale * factor, MIN_SCALE, MAX_SCALE);
       return { scale, x: cx - ((cx - cur.x) / cur.scale) * scale, y: cy - ((cy - cur.y) / cur.scale) * scale };
@@ -264,12 +272,16 @@ export function AtlasMap({
 
   function handleWheel(event: ReactWheelEvent<HTMLDivElement>) {
     event.preventDefault();
+    const viewport = viewportRef.current;
+    if (!viewport) return;
     const rect = event.currentTarget.getBoundingClientRect();
-    const px = event.clientX - rect.left;
-    const py = event.clientY - rect.top;
+    const vw = viewport.clientWidth, vh = viewport.clientHeight;
+    const s = Math.min(vw / layout.width, vh / layout.height);
+    const stageX = (event.clientX - rect.left - (vw - layout.width * s) / 2) / s;
+    const stageY = (event.clientY - rect.top - (vh - layout.height * s) / 2) / s;
     setView((cur) => {
       const scale = clamp(cur.scale * (event.deltaY > 0 ? 0.9 : 1.1), MIN_SCALE, MAX_SCALE);
-      return { scale, x: px - ((px - cur.x) / cur.scale) * scale, y: py - ((py - cur.y) / cur.scale) * scale };
+      return { scale, x: stageX - ((stageX - cur.x) / cur.scale) * scale, y: stageY - ((stageY - cur.y) / cur.scale) * scale };
     });
   }
 
@@ -283,7 +295,14 @@ export function AtlasMap({
   function handlePointerMove(event: ReactPointerEvent<HTMLDivElement>) {
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
-    setView((cur) => ({ ...cur, x: drag.viewX + event.clientX - drag.startX, y: drag.viewY + event.clientY - drag.startY }));
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const s = Math.min(viewport.clientWidth / layout.width, viewport.clientHeight / layout.height);
+    setView((cur) => ({
+      ...cur,
+      x: drag.viewX + (event.clientX - drag.startX) / s,
+      y: drag.viewY + (event.clientY - drag.startY) / s,
+    }));
   }
 
   function endPan(event: ReactPointerEvent<HTMLDivElement>) {
@@ -301,12 +320,11 @@ export function AtlasMap({
       const scale = clamp(Math.max(view.scale, preferredScale), MIN_SCALE, MAX_SCALE);
       setView({
         scale,
-        x: viewport.clientWidth / 2 - (position.x + NODE_WIDTH / 2) * scale,
-        y: viewport.clientHeight / 2 - (position.y + NODE_HEIGHT / 2) * scale,
+        x: layout.width / 2 - (position.x + NODE_WIDTH / 2) * scale,
+        y: layout.height / 2 - (position.y + NODE_HEIGHT / 2) * scale,
       });
     },
-    fitMap() { fitToViewport(MIN_SCALE); },
-  }), [layout, view.scale, fitToViewport]);
+  }), [layout, view.scale]);
 
   const conceptsByModule = atlasIndex.conceptsByModule;
   const selected = selectedId ? atlasIndex.conceptsById.get(selectedId) : undefined;
@@ -316,10 +334,10 @@ export function AtlasMap({
       <div className="map-toolbar">
         <div><strong>理解一个概念，显现与它直接关联的知识分支</strong></div>
         <nav aria-label="地图控制">
-          <output className="zoom-readout" aria-label="当前地图缩放比例">{Math.round(view.scale * 100)}%</output>
+          <output className="zoom-readout" aria-label="当前地图缩放比例">{Math.round((view.scale / DEFAULT_SCALE) * 100)}%</output>
           <button onClick={() => zoomBy(1.25)} aria-label="放大地图">＋</button>
           <button onClick={() => zoomBy(0.8)} aria-label="缩小地图">−</button>
-          <button className="fit-map" onClick={() => fitToViewport(MIN_SCALE)}>全图</button>
+          <button className="fit-map" onClick={() => resetView()}>全图</button>
         </nav>
       </div>
 
@@ -332,7 +350,7 @@ export function AtlasMap({
         onWheel={handleWheel}
         ref={viewportRef}
       >
-        <svg className="atlas-stage" viewBox={`0 0 ${layout.width} ${layout.height}`} preserveAspectRatio="xMid yMid meet" aria-label="SVG 矢量知识地图">
+        <svg className="atlas-stage" width="100%" height="100%" viewBox={`0 0 ${layout.width} ${layout.height}`} preserveAspectRatio="xMid yMid meet" aria-label="SVG 矢量知识地图">
           {STATIC_SVG_DEFS}
           <defs>
             {atlas.modules.map((module, moduleIndex) => (
@@ -346,29 +364,28 @@ export function AtlasMap({
 
           <g className="vector-map-layer" transform={`translate(${view.x} ${view.y}) scale(${view.scale})`}>
             <g className="fog-field" aria-hidden="true">
-              <rect className="fog-veil" x="-5000" y="-5000" width="10000" height="10000" />
-              <g className="mist-drift mist-drift-a">
-                <ellipse cx="360" cy="260" rx="720" ry="190" />
-                <ellipse cx="1220" cy="760" rx="880" ry="230" />
+              <rect className="fog-veil" x="-50000" y="-50000" width="100000" height="100000" />
+              <g transform={`translate(${layout.width / 2} ${layout.height / 2})`}>
+                <g className="mist-drift mist-drift-a">
+                  <ellipse cx="-440" cy="-260" rx="720" ry="190" />
+                  <ellipse cx="420" cy="240" rx="880" ry="230" />
+                </g>
+                <g className="mist-drift mist-drift-b">
+                  <ellipse cx="180" cy="-440" rx="610" ry="155" />
+                  <ellipse cx="-560" cy="420" rx="760" ry="210" />
+                </g>
+                <g className="mist-drift mist-drift-c">
+                  <ellipse cx="-180" cy="90" rx="440" ry="126" />
+                  <ellipse cx="780" cy="-170" rx="520" ry="142" />
+                </g>
               </g>
-              <g className="mist-drift mist-drift-b">
-                <ellipse cx="980" cy="80" rx="610" ry="155" />
-                <ellipse cx="240" cy="940" rx="760" ry="210" />
-              </g>
-              <g className="mist-drift mist-drift-c">
-                <ellipse cx="620" cy="610" rx="440" ry="126" />
-                <ellipse cx="1580" cy="350" rx="520" ry="142" />
-              </g>
-              {atlas.modules.map((module) => {
-                const position = layout.modulePositions.get(module.id);
-                return position ? (
-                  <g className="fog-contours" key={`fog-contours-${module.id}`} transform={`translate(${position.x} ${position.y})`}>
-                    <ellipse cx="0" cy="0" rx="280" ry="200" />
-                    <ellipse cx="0" cy="0" rx="220" ry="150" />
-                    <ellipse cx="0" cy="0" rx="160" ry="100" />
-                  </g>
-                ) : null;
-              })}
+              {FOG_SPOTS.map((spot, i) => (
+                <g className="fog-contours" key={`fog-contour-${i}`} transform={`translate(${layout.width * spot[0]} ${layout.height * spot[1]})`}>
+                  <ellipse cx="0" cy="0" rx="280" ry="200" />
+                  <ellipse cx="0" cy="0" rx="220" ry="150" />
+                  <ellipse cx="0" cy="0" rx="160" ry="100" />
+                </g>
+              ))}
             </g>
 
             <g className="explored-clearings" aria-hidden="true">

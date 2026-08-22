@@ -1,5 +1,4 @@
 import {
-  type KeyboardEvent as ReactKeyboardEvent,
   useCallback,
   useEffect,
   useMemo,
@@ -11,8 +10,9 @@ import { Link, useParams } from "react-router";
 import { demoApi } from "../lib/api";
 import { useRunPolling } from "../lib/useRunPolling";
 import { cleanLabel } from "../lib/atlasUtils";
-import { ConceptDossier, type EnrichedRelation } from "../components/ConceptDossier";
+import { NodeLesson } from "../components/NodeLesson";
 import { AtlasMap, type AtlasMapHandle } from "../components/AtlasMap";
+import { TeachingSession } from "../components/TeachingSession";
 import { type AtlasIndex } from "../lib/types";
 import { RunModeBadge } from "../RunModeBadge";
 import "../atlas-v2.css";
@@ -24,31 +24,13 @@ export default function AtlasRoute() {
   const [selectedId, setSelectedId] = useState("");
   const [openedConceptIds, setOpenedConceptIds] = useState<Set<string>>(() => new Set());
   const [query, setQuery] = useState("");
+  const [growing, setGrowing] = useState(false);
+  const [growError, setGrowError] = useState("");
+  const [wrongOffer, setWrongOffer] = useState<{ conceptId: string; conceptName: string } | null>(null);
+  const [expandTarget, setExpandTarget] = useState<{ conceptId: string; conceptName: string } | null>(null);
+  const [teachCollapsed, setTeachCollapsed] = useState(false);
+  const growChainRef = useRef<Promise<void>>(Promise.resolve());
   const mapRef = useRef<AtlasMapHandle>(null);
-  const closeButtonRef = useRef<HTMLButtonElement>(null);
-  const previousFocusRef = useRef<HTMLElement | null>(null);
-
-  // ── Chat panel state (with localStorage persistence) ──
-  const CHAT_STORAGE_KEY = `domainatlas-chat-${runId}`;
-  const [chatOpen, setChatOpen] = useState(false);
-  const [chatMessages, setChatMessages] = useState<{ role: "user" | "tutor"; text: string }[]>(() => {
-    try { const saved = localStorage.getItem(CHAT_STORAGE_KEY); return saved ? JSON.parse(saved) : []; }
-    catch { return []; }
-  });
-  const [chatInput, setChatInput] = useState("");
-  const [chatLoading, setChatLoading] = useState(false);
-  // Persist chat on every change
-  useEffect(() => { localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(chatMessages)); }, [chatMessages, CHAT_STORAGE_KEY]);
-
-  // ── Per-concept verify state ──
-  // ── Spoiler state for examples ──
-  const [revealedExamples, setRevealedExamples] = useState<Set<string>>(new Set());
-
-  // ── Search state ──
-  const [cachedResults, setCachedResults] = useState<{ title: string; url: string; snippet: string; source: string }[]>([]);
-  const [extraResults, setExtraResults] = useState<{ title: string; url: string; snippet: string; source: string }[]>([]);
-  const searchResults = [...cachedResults, ...extraResults];
-  const [searchLoading, setSearchLoading] = useState(false);
 
   // oxlint-disable-next-line react/set-state-in-effect
   useEffect(() => { setOpenedConceptIds(new Set()); }, [runId]);
@@ -79,36 +61,20 @@ export default function AtlasRoute() {
     return { conceptsById, modulesById, conceptsByModule, relationsByConcept, conceptOrder, learningOrder };
   }, [atlas]);
 
+  // Incremental growth: every grown node is visible. The reveal happens by
+  // growing a node, not by fog — so all concepts in the atlas are unlocked.
   const unlockedConceptIds = useMemo(() => {
-    if (!atlasIndex) return new Set<string>();
-    const rootId = atlasIndex.learningOrder[0];
-    const unlocked = new Set<string>(rootId ? [rootId] : []);
-    const understoodIds = atlasIndex.learningOrder.filter(
-      (conceptId) => run?.progress[conceptId] === "understood",
-    );
-
-    understoodIds.forEach((conceptId) => {
-      unlocked.add(conceptId);
-      (atlasIndex.relationsByConcept.get(conceptId) ?? []).forEach((relation) => {
-        unlocked.add(relation.source_id === conceptId ? relation.target_id : relation.source_id);
-      });
-    });
-    return unlocked;
-  }, [atlasIndex, run?.progress]);
+    if (!atlas) return new Set<string>();
+    return new Set(atlas.concepts.map((concept) => concept.id));
+  }, [atlas]);
 
   useEffect(() => {
     if (!selectedId) return;
-    previousFocusRef.current = document.activeElement as HTMLElement | null;
-    const focusFrame = requestAnimationFrame(() => closeButtonRef.current?.focus());
     function closeOnEscape(event: KeyboardEvent) {
       if (event.key === "Escape") setSelectedId("");
     }
     window.addEventListener("keydown", closeOnEscape);
-    return () => {
-      cancelAnimationFrame(focusFrame);
-      window.removeEventListener("keydown", closeOnEscape);
-      if (previousFocusRef.current?.isConnected) previousFocusRef.current.focus();
-    };
+    return () => window.removeEventListener("keydown", closeOnEscape);
   }, [selectedId]);
 
   const markConceptOpened = useCallback((conceptId: string) => {
@@ -124,15 +90,6 @@ export default function AtlasRoute() {
     markConceptOpened(conceptId);
     setSelectedId(conceptId);
     mapRef.current?.panTo(conceptId, preferredScale);
-    setExtraResults([]);
-    const cached = (run as any)?.pre_search_results?.[conceptId];
-    if (Array.isArray(cached) && cached.length > 0) {
-      setCachedResults(cached);
-      setSearchLoading(false);
-    } else {
-      setCachedResults([]);
-      searchForSources(undefined, false, conceptId);
-    }
   }
 
   const matchingConcepts = useMemo(() => {
@@ -159,24 +116,13 @@ export default function AtlasRoute() {
   const unlockedCount = unlockedConceptIds.size;
   const selected = selectedId ? atlasIndex.conceptsById.get(selectedId) : undefined;
   const selectedModule = selected ? atlasIndex.modulesById.get(selected.module_id) : undefined;
-  const selectedRelations: EnrichedRelation[] = selected
-    ? (atlasIndex.relationsByConcept.get(selected.id) ?? [])
-        .filter((relation) => {
-          const otherId = relation.source_id === selected.id ? relation.target_id : relation.source_id;
-          return unlockedConceptIds.has(otherId);
-        })
-        .map((relation) => {
-          const otherId = relation.source_id === selected.id ? relation.target_id : relation.source_id;
-          const other = atlasIndex.conceptsById.get(otherId);
-          return {
-            id: relation.id,
-            otherId,
-            otherName: other ? other.name : otherId,
-            relation_type: relation.relation_type,
-            explanation: relation.explanation,
-          };
-        })
-    : [];
+  const selectedLabel = selected
+    ? selected.id === "__center__"
+      ? "中心节点"
+      : selected.module_id === "__center__"
+        ? `拓展 ${String(atlas.concepts.filter((c) => c.module_id === "__center__" && c.id !== "__center__").findIndex((c) => c.id === selected.id) + 1).padStart(2, "0")}`
+        : `章节 ${String(atlas.modules.findIndex((m) => m.id === selected.module_id) + 1).padStart(2, "0")}`
+    : undefined;
   const understood =Object.values(run.progress).filter((state) => state === "understood").length;
   const progressPercent = Math.round((understood / atlas.concepts.length) * 100);
   const visibleMatches = new Set(matchingConcepts.map((concept) => concept.id));
@@ -185,100 +131,36 @@ export default function AtlasRoute() {
     if (!selected) return;
     setRun(await demoApi.updateProgress(currentRunId, selected.id, "understood"));
     setSelectedId("");
+    // Marking any node understood (including the center overview) grows the next chapter.
+    await growNext();
   }
 
-  // ── Chat handlers ──
-  async function sendChatMessage() {
-    const text = chatInput.trim();
-    if (!text || chatLoading) return;
-    // Include current concept context if one is selected
-    let msg = text;
-    if (selected) {
-      msg = `[背景：用户在学习「${cleanLabel(selected.name)}」，定义：${selected.definition.slice(0, 400)}，关键点：${selected.key_points.join('；')}]\n\n用户问题：${text}`;
-    }
-    setChatMessages((prev) => [...prev, { role: "user", text }]);
-    setChatInput("");
-    setChatLoading(true);
-    try {
-      const res = await fetch(`/api/runs/${runId}/tutor`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: msg }),
-      });
-      const data = await res.json();
-      setChatMessages((prev) => [...prev, { role: "tutor", text: data.reply }]);
-    } catch {
-      setChatMessages((prev) => [...prev, { role: "tutor", text: "导师暂不可用，请重试。" }]);
-    } finally {
-      setChatLoading(false);
-    }
-  }
+  const allGrown = run?.growth_complete === true;
 
-  async function searchForSources(query_text?: string, append = false, forConceptId?: string) {
-    if (searchLoading) return;
-    const conceptId = forConceptId ?? selected?.id;
-    const concept = (forConceptId ? atlasIndex?.conceptsById.get(forConceptId) : selected) ?? selected;
-    setSearchLoading(true);
-    if (!append) { setCachedResults([]); setExtraResults([]); }
-    try {
-      const msg = query_text || (concept ? `概念：${concept.name}\n定义：${concept.definition.slice(0, 500)}\n关键点：${concept.key_points.join('\n')}` : "");
-      if (!msg) { setSearchLoading(false); return; }
-      const res = await fetch(`/api/runs/${runId}/recommend-sources`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: msg }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data)) {
-          if (append) {
-            setExtraResults(prev => [...prev, ...data.map((r: any) => ({...r, source: 'NEW', isNew: true}))]);
-          } else {
-            setCachedResults(data);
-            if (conceptId) {
-              setRun((prev: any) => prev ? {
-                ...prev,
-                pre_search_results: { ...(prev.pre_search_results ?? {}), [conceptId]: data },
-              } : prev);
-            }
-          }
-        }
+  async function growNext() {
+    if (allGrown) return;
+    const next = growChainRef.current.then(async () => {
+      setGrowing(true);
+      setGrowError("");
+      try {
+        setRun(await demoApi.growNode(currentRunId));
+      } catch (reason) {
+        setGrowError(reason instanceof Error ? reason.message : "生成失败，请稍后重试。");
+      } finally {
+        setGrowing(false);
       }
-    } catch {
-      // ignore
-    } finally {
-      setSearchLoading(false);
-    }
+    });
+    growChainRef.current = next;
+    await next;
   }
-
-
 
   function focusModule(moduleId: string) {
     const firstConcept = atlasIndex?.conceptsByModule.get(moduleId)?.find((concept) => unlockedConceptIds.has(concept.id));
     if (firstConcept) focusConcept(firstConcept.id, 0.72);
   }
 
-  function keepFocusInDialog(event: ReactKeyboardEvent<HTMLElement>) {
-    if (event.key !== "Tab") return;
-    const focusable = Array.from(
-      event.currentTarget.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), a[href], summary, [tabindex]:not([tabindex="-1"])',
-      ),
-    );
-    const first = focusable[0];
-    const last = focusable.at(-1);
-    if (!first || !last) return;
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
-    }
-  }
-
   return (
-    <main className={`atlas-explorer ${selected ? "details-open" : ""}`}>
+    <main className={`atlas-explorer teach-mode ${teachCollapsed ? "teach-collapsed" : ""} ${selected ? "details-open" : ""}`}>
       <header className="explorer-topbar" aria-hidden={selected ? true : undefined}>
         <div className="explorer-title">
           <div className="explorer-title-row">
@@ -305,6 +187,12 @@ export default function AtlasRoute() {
         </label>
         <div className="explorer-status">
           <RunModeBadge run={run} />
+          {growing ? <span className="grow-indicator">正在生成下一章（约需 1 分钟）…</span> : null}
+          {!growing && growError ? (
+            <button className="grow-error" onClick={() => growNext()} title="重试生成">
+              {growError} · 点此重试
+            </button>
+          ) : null}
           <div className="compact-progress" aria-label={`学习进度 ${progressPercent}%`}>
             <span><b>{understood}</b> / {atlas.concepts.length}</span>
             <i><em style={{ width: `${progressPercent}%` }} /></i>
@@ -349,56 +237,33 @@ export default function AtlasRoute() {
       </nav>
 
       {selected ? (
-        <ConceptDossier
-          selected={selected}
-          selectedModule={selectedModule}
-          selectedRelations={selectedRelations}
+        <NodeLesson
+          concept={selected}
+          module={selectedModule}
           run={run}
-          revealedExamples={revealedExamples}
-          searchLoading={searchLoading}
-          searchResults={searchResults}
-          closeButtonRef={closeButtonRef}
+          label={selectedLabel}
           onClose={() => setSelectedId("")}
           onMarkUnderstood={markUnderstood}
-          onFocusConcept={(id) => focusConcept(id)}
-          onRevealToggle={(qid) => setRevealedExamples(prev => {
-            const next = new Set(prev);
-            if (next.has(qid)) next.delete(qid);
-            else next.add(qid);
-            return next;
-          })}
-          onSearchMore={(msg, append) => searchForSources(msg, append)}
-          onOpenChat={() => {
-            setChatOpen(true);
-            if (chatMessages.length === 0) {
-              setChatMessages([{ role: "tutor" as const, text: `可以追问关于「${cleanLabel(selected.name)}」的任何细节。` }]);
-            }
+          onWrongAnswer={(conceptId, conceptName) => setWrongOffer({ conceptId, conceptName })}
+          onExpand={(conceptId, conceptName) => {
+            setTeachCollapsed(false);
+            setExpandTarget({ conceptId, conceptName });
           }}
-          onKeepFocusInDialog={keepFocusInDialog}
         />
       ) : null}
-      {chatOpen ? (
-        <aside className="tutor-panel">
-          <header className="tutor-header">
-            <h3>{run?.model_name || "AI"}</h3>
-            <button onClick={() => setChatOpen(false)} aria-label="关闭">×</button>
-          </header>
-          <div className="tutor-messages">
-            {chatMessages.map((msg, i) => (
-              // oxlint-disable-next-line react/no-array-index-key -- append-only list, index is stable
-              <div key={i} className={`tutor-msg tutor-msg-${msg.role}`}>
-                <b>{msg.role === "user" ? "你" : (run?.model_name || "AI")}</b>
-                <p style={{whiteSpace:"pre-wrap"}}>{msg.text}</p>
-              </div>
-            ))}
-            {chatLoading ? <div className="tutor-msg tutor-msg-tutor"><b>{run?.model_name || "AI"}</b><p>...</p></div> : null}
-          </div>
-          <form className="tutor-input" onSubmit={(e) => { e.preventDefault(); sendChatMessage(); }}>
-            <input value={chatInput} onChange={e => setChatInput(e.target.value)} placeholder="输入问题..." disabled={chatLoading} />
-            <button type="submit" disabled={chatLoading || !chatInput.trim()}>发送</button>
-          </form>
-        </aside>
-      ) : null}
+      <TeachingSession
+        runId={runId}
+        modelName={run.model_name}
+        selectedConceptId={selected?.id}
+        selectedConceptName={selected?.name}
+        wrongOffer={wrongOffer}
+        onDismissOffer={() => setWrongOffer(null)}
+        onRunUpdated={setRun}
+        collapsed={teachCollapsed}
+        onToggleCollapse={() => setTeachCollapsed((v) => !v)}
+        expandTarget={expandTarget}
+        onExpandTargetConsumed={() => setExpandTarget(null)}
+      />
     </main>
   );
 }

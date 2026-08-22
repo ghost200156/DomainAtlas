@@ -3,8 +3,9 @@ import type {
   DemoRun,
   FrameworkPlan,
   LearningBrief,
+  QuizQuestion,
+  TeachStepResult,
 } from "./types";
-import type { SourceSearchResult } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8000/api";
 
@@ -53,14 +54,71 @@ export const demoApi = {
       method: "POST",
       body: JSON.stringify({ message }),
     }),
+  teachNext: (runId: string, answer?: string) =>
+    request<TeachStepResult>(`/runs/${runId}/teach/next`, {
+      method: "POST",
+      body: JSON.stringify({ answer: answer ?? null }),
+    }),
+  growNode: (runId: string) =>
+    request<DemoRun>(`/runs/${runId}/grow`, { method: "POST" }),
+  recordQuizAnswer: (
+    runId: string,
+    body: { concept_id: string; question_index: number; selected_index: number; correct: boolean },
+  ) =>
+    request<DemoRun>(`/runs/${runId}/quiz/answer`, { method: "POST", body: JSON.stringify(body) }),
+  explain: (runId: string, conceptId: string, question: string) =>
+    request<{ reply: string }>(`/runs/${runId}/explain`, {
+      method: "POST",
+      body: JSON.stringify({ concept_id: conceptId, question }),
+    }),
+  explainFree: (runId: string, question: string) =>
+    request<{ reply: string }>(`/runs/${runId}/explain-free`, {
+      method: "POST",
+      body: JSON.stringify({ message: question }),
+    }),
+  saveNode: (runId: string, question: string, answer: string) =>
+    request<DemoRun>(`/runs/${runId}/save-node`, {
+      method: "POST",
+      body: JSON.stringify({ question, answer }),
+    }),
+  chat: (runId: string, question: string, history: { role: string; text: string }[]) =>
+    request<{ reply: string; node_name: string | null; node_definition: string }>(`/runs/${runId}/chat`, {
+      method: "POST",
+      body: JSON.stringify({ question, history }),
+    }),
+  saveChatNode: (runId: string, name: string, definition: string) =>
+    request<DemoRun>(`/runs/${runId}/save-chat-node`, {
+      method: "POST",
+      body: JSON.stringify({ name, definition }),
+    }),
+  suggestQuestions: (domain: string) =>
+    request<{ goals: { label: string; desc: string }[]; backgrounds: { label: string; desc: string }[] }>(`/suggest-questions`, {
+      method: "POST",
+      body: JSON.stringify({ domain }),
+    }),
+  reviewQuestions: (runId: string, conceptId: string) =>
+    request<{ concept_name: string; knowledge: string; questions: QuizQuestion[] }>(`/runs/${runId}/review-questions`, {
+      method: "POST",
+      body: JSON.stringify({ concept_id: conceptId }),
+    }),
+  expandQuestion: (runId: string, conceptId: string) =>
+    request<{ options: string[] }>(`/runs/${runId}/expand-question`, {
+      method: "POST",
+      body: JSON.stringify({ concept_id: conceptId }),
+    }),
+  expandNode: (runId: string, conceptId: string, question: string) =>
+    request<{ reply: string; quiz: QuizQuestion[]; node_name: string; node_id: string; run: DemoRun }>(`/runs/${runId}/expand`, {
+      method: "POST",
+      body: JSON.stringify({ concept_id: conceptId, question }),
+    }),
+  saveReview: (runId: string, conceptId: string, conceptName: string, questions: QuizQuestion[]) =>
+    request<DemoRun>(`/runs/${runId}/save-review`, {
+      method: "POST",
+      body: JSON.stringify({ concept_id: conceptId, concept_name: conceptName, questions }),
+    }),
   verifyConcept: (runId: string, conceptId: string, explanation: string) =>
     request<{ passed: boolean; feedback: string }>(`/runs/${runId}/concepts/${conceptId}/verify`, {
       method: "POST",
       body: JSON.stringify({ explanation }),
-    }),
-  recommendSources: (runId: string, message: string) =>
-    request<SourceSearchResult[]>(`/runs/${runId}/recommend-sources`, {
-      method: "POST",
-      body: JSON.stringify({ message }),
     }),
 };

@@ -41,10 +41,10 @@ The confirmed learning framework — the contract between planning and research.
 | domain_definition | str | What this domain covers |
 | scope | str | What's in and out of scope |
 | exclusions | list[str] | Explicitly excluded topics |
-| modules | list[FrameworkModule] (3-7) | The learning modules |
+| modules | list[FrameworkModule] (≥3, no fixed upper limit) | The learning modules — count is judged from domain complexity, not a hardcoded number |
 | evidence_requirements | list[str] | What kind of evidence is needed |
 | learning_sequence | list[str] | Module IDs in recommended order |
-| estimated_concepts | int (6-40) | Total concept count (modules × 6) |
+| estimated_concepts | int (≥1) | Rough estimate only (modules × 4), not a validation cap |
 | estimated_minutes | int (30-1440) | Estimated learning time |
 | completion_criteria | list[str] | How to know when learning is done |
 
