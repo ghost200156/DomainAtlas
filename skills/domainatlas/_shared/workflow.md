@@ -23,7 +23,7 @@ calibrating → planning → waiting_confirmation → researching
 3. **Schema Validation**: Every agent output is validated against its Pydantic schema. Validation failures block the pipeline.
 4. **Graph Connectivity**: The Atlas concept graph must be connected — every concept reachable from every other via relations.
 5. **Reference Integrity**: All concept IDs, module IDs, source IDs, and evidence IDs must reference valid entities. Dangling references are repaired or rejected.
-6. **Minimum Outputs**: Atlas must have ≥3 modules, ≥24 concepts (or 4× module count), each concept must have ≥1 relation.
+6. **Minimum Outputs**: Atlas must have ≥3 modules, ≥3 concepts per module, each concept must have ≥1 relation.
 7. **Fallback**: In `auto` mode, model failures fall back to fixture data. In `live` mode, failures propagate as errors.
 
 ## Execution Modes

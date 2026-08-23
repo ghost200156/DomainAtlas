@@ -6,7 +6,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from fastapi.responses import StreamingResponse
 
-from app.api.dependencies import get_orchestrator, get_store, get_tasks
+from app.api.dependencies import get_controller, get_orchestrator, get_store, get_tasks
 from app.schemas.demo import (
     AssessmentAttemptRequest,
     AssessmentFeedback,
@@ -16,15 +16,31 @@ from app.schemas.demo import (
     FrameworkPlan,
     LearningBrief,
     ProgressUpdateRequest,
+    QuizResult,
     ReviewPath,
     RunEvent,
     RunStatus,
 )
-from app.schemas.learning import TutorRequest, VerifyRequest, VerifyResponse, SearchResult
+from app.schemas.learning import (
+    ChatRequest,
+    ExplainRequest,
+    QuizAnswerRequest,
+    ReviewQuestionsRequest,
+    SaveChatNodeRequest,
+    SaveNodeRequest,
+    SaveReviewRequest,
+    SuggestGoalsRequest,
+    TutorRequest,
+    VerifyRequest,
+    VerifyResponse,
+    SearchResult,
+)
+from app.schemas.teach import TeachAnswerRequest, TeachStepResult
 from app.store import DemoStore
 from app.workflow.fixtures import make_atlas, make_plan, make_research_pack
 from app.workflow.orchestrator import DemoOrchestrator
 from app.workflow.task_registry import TaskRegistry
+from app.workflow.teaching import StudyController
 from app.workflow.validator import validate_plan
 
 router = APIRouter(prefix="/api", tags=["demo"])
@@ -108,7 +124,7 @@ async def update_plan(
     return run
 
 
-@router.post("/runs/{run_id}/plan/confirm", response_model=DemoRun, status_code=202)
+@router.post("/runs/{run_id}/plan/confirm", response_model=DemoRun)
 async def confirm_plan(
     run_id: str,
     request: ConfirmPlanRequest,
@@ -125,20 +141,209 @@ async def confirm_plan(
         raise HTTPException(status_code=422, detail=issues)
 
     run.plan = plan
-    run.status = RunStatus.GENERATING
-    run.current_step = "queued_for_research"
+    run.status = RunStatus.READY
+    run.current_step = "ready"
     run.error = None
+    run.research_pack = None
+    run.atlas = orchestrator.init_empty_atlas(run)
+    run.quality_report = None
     run.events.append(
         RunEvent(
             id=len(run.events) + 1,
-            type="plan_confirmed",
-            step="queued_for_research",
-            message="框架已确认，开始研究和建图。",
+            type="atlas_ready",
+            step="ready",
+            message="地图已初始化，标记中心节点为「已理解」即可生成第一个章节。",
         )
     )
     await store.save(run)
-    tasks.start(f"generate:{run.id}", orchestrator.generate_atlas(run.id))
     return run
+
+
+@router.post("/runs/{run_id}/quiz/answer", response_model=DemoRun)
+async def record_quiz_answer(
+    run_id: str,
+    request: QuizAnswerRequest,
+    store: DemoStore = Depends(get_store),
+) -> DemoRun:
+    """Record one quiz answer into the learner's feedback history."""
+    run = await _get_run(run_id, store)
+    run.quiz_results.append(
+        QuizResult(
+            concept_id=request.concept_id,
+            question_index=request.question_index,
+            selected_index=request.selected_index,
+            correct=request.correct,
+        )
+    )
+    await store.save(run)
+    return run
+
+
+@router.post("/runs/{run_id}/explain")
+async def explain(
+    run_id: str,
+    request: ExplainRequest,
+    store: DemoStore = Depends(get_store),
+    orchestrator: DemoOrchestrator = Depends(get_orchestrator),
+) -> dict:
+    """Point-and-read: explain a question about a specific node (with atlas context)."""
+    run = await _get_run(run_id, store)
+    if run.atlas is None:
+        raise HTTPException(status_code=409, detail="领域地图还没有生成")
+    concept = next((c for c in run.atlas.concepts if c.id == request.concept_id), None)
+    if concept is None:
+        raise HTTPException(status_code=404, detail="没有找到这个概念")
+    try:
+        reply = await orchestrator.pipeline().tutor_chat(run.atlas, concept, request.question)
+        return {"reply": reply}
+    except Exception as error:
+        raise HTTPException(status_code=502, detail=f"解释失败：{error}") from error
+
+
+@router.post("/runs/{run_id}/expand-question")
+async def expand_question(
+    run_id: str,
+    request: ReviewQuestionsRequest,
+    store: DemoStore = Depends(get_store),
+    orchestrator: DemoOrchestrator = Depends(get_orchestrator),
+) -> dict:
+    """Generate selectable「哪里不理解」options for a concept (agent-judged)."""
+    run = await _get_run(run_id, store)
+    if run.atlas is None:
+        raise HTTPException(status_code=409, detail="领域地图还没有生成")
+    concept = next((c for c in run.atlas.concepts if c.id == request.concept_id), None)
+    if concept is None:
+        raise HTTPException(status_code=404, detail="没有找到这个概念")
+    try:
+        options = await orchestrator.pipeline().generate_expand_options(run.brief, concept)
+        return {"options": options}
+    except Exception as error:
+        raise HTTPException(status_code=502, detail=f"生成提问失败：{error}") from error
+
+
+@router.post("/runs/{run_id}/expand")
+async def expand_node(
+    run_id: str,
+    request: ExplainRequest,
+    store: DemoStore = Depends(get_store),
+    orchestrator: DemoOrchestrator = Depends(get_orchestrator),
+) -> dict:
+    """Deepen a concept: explain the learner's confusion, quiz it, auto-save the sub-node."""
+    run = await _get_run(run_id, store)
+    if run.atlas is None:
+        raise HTTPException(status_code=409, detail="领域地图还没有生成")
+    if not any(c.id == request.concept_id for c in run.atlas.concepts):
+        raise HTTPException(status_code=404, detail="没有找到这个概念")
+    try:
+        return await orchestrator.expand_node(run_id, request.concept_id, request.question)
+    except Exception as error:
+        raise HTTPException(status_code=502, detail=f"拓展失败：{error}") from error
+
+
+@router.post("/runs/{run_id}/explain-free")
+async def explain_free(
+    run_id: str,
+    request: TutorRequest,
+    store: DemoStore = Depends(get_store),
+    orchestrator: DemoOrchestrator = Depends(get_orchestrator),
+) -> dict:
+    """Free-form explanation in the domain context (no selected node)."""
+    run = await _get_run(run_id, store)
+    if run.atlas is None:
+        raise HTTPException(status_code=409, detail="领域地图还没有生成")
+    try:
+        reply = await orchestrator.pipeline().explain_free(run.brief, run.atlas, request.message)
+        return {"reply": reply}
+    except Exception as error:
+        raise HTTPException(status_code=502, detail=f"讲解失败：{error}") from error
+
+
+@router.post("/runs/{run_id}/save-node", response_model=DemoRun)
+async def save_node(
+    run_id: str,
+    request: SaveNodeRequest,
+    store: DemoStore = Depends(get_store),
+    orchestrator: DemoOrchestrator = Depends(get_orchestrator),
+) -> DemoRun:
+    """Turn a teaching-session Q&A into a reusable map node."""
+    return await orchestrator.save_node(run_id, request.question, request.answer)
+
+
+@router.post("/runs/{run_id}/chat")
+async def chat(
+    run_id: str,
+    request: ChatRequest,
+    store: DemoStore = Depends(get_store),
+    orchestrator: DemoOrchestrator = Depends(get_orchestrator),
+) -> dict:
+    """Answer a question; the agent may auto-summarize the prior segment into a node."""
+    run = await _get_run(run_id, store)
+    if run.atlas is None:
+        raise HTTPException(status_code=409, detail="领域地图还没有生成")
+    return await orchestrator.chat(run_id, request.question, request.history)
+
+
+@router.post("/runs/{run_id}/review-questions")
+async def review_questions(
+    run_id: str,
+    request: ReviewQuestionsRequest,
+    store: DemoStore = Depends(get_store),
+    orchestrator: DemoOrchestrator = Depends(get_orchestrator),
+) -> dict:
+    """Generate practice questions for a weak concept (shown in the teaching session)."""
+    try:
+        return await orchestrator.review_questions(run_id, request.concept_id)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@router.post("/runs/{run_id}/save-review", response_model=DemoRun)
+async def save_review(
+    run_id: str,
+    request: SaveReviewRequest,
+    store: DemoStore = Depends(get_store),
+    orchestrator: DemoOrchestrator = Depends(get_orchestrator),
+) -> DemoRun:
+    """Persist an answered review as a node."""
+    return await orchestrator.save_review(
+        run_id, request.concept_id, request.concept_name, request.questions
+    )
+
+
+@router.post("/runs/{run_id}/save-chat-node", response_model=DemoRun)
+async def save_chat_node(
+    run_id: str,
+    request: SaveChatNodeRequest,
+    store: DemoStore = Depends(get_store),
+    orchestrator: DemoOrchestrator = Depends(get_orchestrator),
+) -> DemoRun:
+    """Persist a user-approved node from a chat summary."""
+    return await orchestrator.persist_node(run_id, request.name, request.definition)
+
+
+@router.post("/suggest-questions")
+async def suggest_questions(
+    request: SuggestGoalsRequest,
+    orchestrator: DemoOrchestrator = Depends(get_orchestrator),
+) -> dict:
+    """Generate domain-specific interview options (goals + backgrounds)."""
+    try:
+        return await orchestrator.pipeline().suggest_questions(request.domain)
+    except Exception as error:
+        raise HTTPException(status_code=502, detail=f"生成选项失败：{error}") from error
+
+
+@router.post("/runs/{run_id}/grow", response_model=DemoRun)
+async def grow_node(
+    run_id: str,
+    store: DemoStore = Depends(get_store),
+    orchestrator: DemoOrchestrator = Depends(get_orchestrator),
+) -> DemoRun:
+    """Generate the next chapter node and auto-link it. One node per call."""
+    try:
+        return await orchestrator.grow_node(run_id)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @router.post("/runs/{run_id}/retry", response_model=DemoRun, status_code=202)
@@ -152,24 +357,16 @@ async def retry_run(
     if run.status != RunStatus.FAILED:
         raise HTTPException(status_code=409, detail="只有失败的任务可以重试")
 
-    failed_step = run.error.failed_step if run.error else None
     run.error = None
     if run.plan is None:
         run.status = RunStatus.PREPARING_PLAN
         await store.save(run)
         tasks.start(f"prepare:{run.id}", orchestrator.prepare_plan(run.id))
-    elif (
-        failed_step == "validating"
-        and run.atlas is not None
-        and run.research_pack is not None
-    ):
-        run.status = RunStatus.GENERATING
-        await store.save(run)
-        tasks.start(f"finish:{run.id}", orchestrator.finish_atlas(run.id))
     else:
-        run.status = RunStatus.GENERATING
+        run.status = RunStatus.READY
+        run.current_step = "ready"
+        run.atlas = orchestrator.init_empty_atlas(run)
         await store.save(run)
-        tasks.start(f"generate:{run.id}", orchestrator.generate_atlas(run.id))
     return run
 
 
@@ -313,6 +510,27 @@ async def tutor_chat(
         raise HTTPException(status_code=502, detail=f"导师回复失败：{error}") from error
 
 
+@router.post("/runs/{run_id}/teach/next", response_model=TeachStepResult)
+async def teach_next(
+    run_id: str,
+    request: TeachAnswerRequest | None = None,
+    store: DemoStore = Depends(get_store),
+    controller: StudyController = Depends(get_controller),
+) -> TeachStepResult:
+    """Advance the bounded teaching loop by one step.
+
+    With no body: decide and execute the next action. With ``{answer}`` and a
+    pending practice question: grade the answer, update the learner model, and
+    return the result. The controller proposes; governance validates; state is
+    persisted on the run.
+    """
+    answer = request.answer if request else None
+    try:
+        return await controller.next_step(run_id, answer)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
 @router.post("/runs/{run_id}/concepts/{concept_id}/verify", response_model=VerifyResponse)
 async def verify_concept(
     run_id: str,
@@ -353,28 +571,6 @@ async def get_cached_sources(
     run = await _get_run(run_id, store)
     cached = run.pre_search_results
     return cached.get(concept_id, [])
-
-
-@router.post("/runs/{run_id}/recommend-sources")
-async def recommend_sources(
-    run_id: str,
-    request: TutorRequest,
-    store: DemoStore = Depends(get_store),
-    orchestrator: DemoOrchestrator = Depends(get_orchestrator),
-) -> list[dict]:
-    """Ask AI to recommend actual URLs based on concept content."""
-    run = await _get_run(run_id, store)
-    query_text = request.message or run.brief.domain
-    try:
-        prompt = f"根据以下具体概念内容，推荐3个直接相关的网页链接（不要入门教程、不要总览页，要针对这个具体知识点的页面）。返回JSON数组[{{\"title\":\"网页标题\",\"url\":\"完整URL\"}}]。只输出JSON。\n\n概念内容：{query_text[:1000]}"
-        text = await orchestrator.pipeline()._run_text(prompt, "只输出JSON数组。")
-        import json as _json
-        text = text.strip()
-        if text.startswith("```"): text = text.split("\n", 1)[1].rsplit("\n```", 1)[0] if "```" in text[text.find("\n"):] else text.split("\n", 1)[1]
-        results = _json.loads(text) if text.strip().startswith('[') else []
-        return [{"title": r.get("title",""), "url": r.get("url",""), "snippet": r.get("url",""), "source": "ai"} for r in results[:5] if r.get("url")]
-    except Exception:
-        return []
 
 
 @router.post("/runs/{run_id}/search", response_model=list[SearchResult])

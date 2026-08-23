@@ -1,33 +1,14 @@
+"""Tutor, verify, and search request/response DTOs.
+
+Note: the learner/plan models (``LearningBrief``, ``FrameworkModule``,
+``FrameworkPlan``) were removed from here — their canonical definitions live in
+``app.schemas.demo``. This file now holds only the tutor/verify/search payloads
+used by the run API.
+"""
+
 from pydantic import BaseModel, Field
 
-
-class LearningBrief(BaseModel):
-    """The learner's goal and constraints for one bounded learning task."""
-
-    topic: str = Field(min_length=1, max_length=500)
-    learner_background: str = Field(min_length=1, max_length=2_000)
-    learning_goal: str = Field(min_length=1, max_length=2_000)
-    time_budget_minutes: int = Field(gt=0, le=10_080)
-    desired_outcome: str = Field(min_length=1, max_length=2_000)
-
-
-class FrameworkModule(BaseModel):
-    name: str = Field(min_length=1, max_length=200)
-    purpose: str = Field(min_length=1, max_length=1_000)
-    core_questions: list[str] = Field(min_length=1, max_length=20)
-    priority: str = Field(min_length=1, max_length=40)
-
-
-class FrameworkPlan(BaseModel):
-    """A proposed, bounded map for the learner to confirm or revise."""
-
-    scope: str = Field(min_length=1, max_length=2_000)
-    modules: list[FrameworkModule] = Field(min_length=1, max_length=20)
-    exclusions: list[str] = Field(default_factory=list, max_length=20)
-    assumptions: list[str] = Field(default_factory=list, max_length=20)
-
-
-# ── Tutor, Verify & Search ──
+from app.schemas.agent_io import QuizQuestion
 
 
 class TutorRequest(BaseModel):
@@ -50,3 +31,55 @@ class SearchResult(BaseModel):
     snippet: str
     source: str  # "wikipedia", "arxiv", "github", "web"
 
+
+class ExplainRequest(BaseModel):
+    concept_id: str = Field(min_length=1)
+    question: str = Field(min_length=1, max_length=2_000)
+
+
+class QuizAnswerRequest(BaseModel):
+    concept_id: str = Field(min_length=1)
+    question_index: int = Field(ge=0)
+    selected_index: int = Field(ge=0)
+    correct: bool
+
+
+class SaveNodeRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=2_000)
+    answer: str = Field(min_length=1, max_length=4_000)
+
+
+class ChatMessage(BaseModel):
+    role: str
+    text: str
+
+
+class ChatRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=2_000)
+    history: list[ChatMessage] = Field(default_factory=list, max_length=50)
+
+
+class ChatResult(BaseModel):
+    reply: str
+    summarize: bool = False
+    node_name: str = ""
+    node_definition: str = ""
+
+
+class ReviewQuestionsRequest(BaseModel):
+    concept_id: str = Field(min_length=1)
+
+
+class SaveReviewRequest(BaseModel):
+    concept_id: str = Field(min_length=1)
+    concept_name: str = Field(min_length=1)
+    questions: list[QuizQuestion]
+
+
+class SaveChatNodeRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    definition: str = Field(min_length=1, max_length=5_000)
+
+
+class SuggestGoalsRequest(BaseModel):
+    domain: str = Field(min_length=2, max_length=200)

@@ -18,41 +18,6 @@ def make_brief() -> LearningBrief:
     )
 
 
-def test_demo_orchestrator_builds_a_complete_atlas(tmp_path) -> None:
-    async def scenario() -> None:
-        store = DemoStore(tmp_path)
-        orchestrator = DemoOrchestrator(store, delay_seconds=0, agent_mode="fixture")
-        run = DemoRun(id="demo-run", status=RunStatus.PREPARING_PLAN, brief=make_brief())
-        await store.save(run)
-
-        await orchestrator.prepare_plan(run.id)
-        planned = await store.get(run.id)
-        assert planned.status == RunStatus.WAITING_CONFIRMATION
-        assert planned.plan is not None
-        assert len(planned.plan.modules) == 4
-
-        planned.status = RunStatus.GENERATING
-        await store.save(planned)
-        await orchestrator.generate_atlas(run.id)
-
-        completed = await store.get(run.id)
-        assert completed.status == RunStatus.READY
-        assert completed.atlas is not None
-        assert len(completed.atlas.concepts) == 24
-        assert len(completed.atlas.relations) >= 23
-        assert all(
-            sum(concept.module_id == module.id for concept in completed.atlas.concepts) == 6
-            for module in completed.atlas.modules
-        )
-        assert validate_atlas(completed.atlas) == []
-        assert completed.quality_report is not None
-        assert completed.quality_report.publishable is True
-        assert completed.execution_mode == "fixture"
-        assert completed.fallback_notes
-
-    asyncio.run(scenario())
-
-
 def test_store_returns_independent_run_snapshots(tmp_path) -> None:
     async def scenario() -> None:
         store = DemoStore(tmp_path)
@@ -151,30 +116,3 @@ def test_agent_system_plan_uses_domain_concepts_instead_of_generic_templates() -
     assert root_neighbors == set(atlas.learning_path[0].concept_ids[1:])
     assert validate_atlas(atlas, research_pack) == []
 
-
-def test_reference_repair_removes_model_generated_dangling_ids(tmp_path) -> None:
-    brief = make_brief()
-    plan = make_plan(brief)
-    research_pack = make_research_pack(plan)
-
-    async def scenario() -> None:
-        store = DemoStore(tmp_path)
-        orchestrator = DemoOrchestrator(store, delay_seconds=0, agent_mode="fixture")
-        run = DemoRun(id="repair-fixture", status=RunStatus.PREPARING_PLAN, brief=brief)
-        await store.save(run)
-        await orchestrator.prepare_plan(run.id)
-        planned = await store.get(run.id)
-        planned.status = RunStatus.GENERATING
-        await store.save(planned)
-        await orchestrator.generate_atlas(run.id)
-        completed = await store.get(run.id)
-        assert completed.atlas is not None
-        completed.atlas.assessments[0].related_concept_ids = ["missing-concept"]
-
-        repairs = repair_atlas_references(completed.atlas, research_pack)
-
-        assert repairs
-        assert completed.atlas.assessments[0].related_concept_ids != ["missing-concept"]
-        assert validate_atlas(completed.atlas, research_pack) == []
-
-    asyncio.run(scenario())

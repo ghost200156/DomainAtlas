@@ -55,17 +55,28 @@ export type AtlasModule = {
   color: string;
 };
 
+export type QuizQuestion = {
+  question: string;
+  options: string[];
+  correct_index: number;
+  explanation: string;
+};
+
 export type ConceptNode = {
   id: string;
   module_id: string;
+  section_type?: string;
   name: string;
   definition: string;
   why_it_matters: string;
   key_points: string[];
   example?: string;
+  hands_on?: string;
+  reading?: string;
   evidence_ids: string[];
   misconception?: string;
   uncertainty?: string;
+  quiz?: QuizQuestion[];
 };
 
 export type AtlasDocument = {
@@ -151,6 +162,7 @@ export type DemoRun = {
   events: RunEvent[];
   progress: Record<string, "unvisited" | "unclear" | "understood">;
   assessment_results: AssessmentFeedback[];
+  growth_complete?: boolean;
   error?: {
     code: string;
     message: string;
@@ -175,10 +187,48 @@ export type AtlasIndex = {
   learningOrder: string[];
 };
 
-export type SourceSearchResult = {
-  id?: string;
-  title: string;
-  url: string;
-  snippet: string;
-  source: string;
+// ── Teaching loop (ADR-0003) ──
+
+export type TeachAction =
+  | "introduce_concept"
+  | "run_practice"
+  | "assess"
+  | "schedule_review"
+  | "mark_complete";
+
+export type LearningRecord = {
+  id: string;
+  concept_id: string;
+  kind: "insight" | "misconception" | "question";
+  note: string;
+  created_at: string;
+};
+
+export type ConceptMastery = {
+  concept_id: string;
+  state: "unvisited" | "introduced" | "practicing" | "understood" | "weak";
+  mastery: number;
+  attempt_count: number;
+  last_reviewed_at?: string;
+  review_due: boolean;
+  records: LearningRecord[];
+};
+
+export type LearnerModel = {
+  concepts: Record<string, ConceptMastery>;
+  steps_taken: number;
+  pending_practice_concept_id?: string;
+  started_at: string;
+  updated_at: string;
+};
+
+export type TeachStepResult = {
+  action: TeachAction;
+  target_concept_id?: string;
+  rationale: string;
+  message: string;
+  question?: string;
+  learner_model?: LearnerModel;
+  done: boolean;
+  budget_remaining: number;
 };

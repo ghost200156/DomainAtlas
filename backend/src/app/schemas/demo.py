@@ -4,6 +4,9 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.schemas.agent_io import QuizQuestion
+from app.schemas.learner import LearnerModel, MissionDoc
+
 
 class RunStatus(StrEnum):
     PREPARING_PLAN = "PREPARING_PLAN"
@@ -52,10 +55,10 @@ class FrameworkPlan(BaseModel):
     domain_definition: str
     scope: str
     exclusions: list[str] = Field(default_factory=list)
-    modules: list[FrameworkModule] = Field(min_length=3, max_length=7)
+    modules: list[FrameworkModule] = Field(min_length=3)
     evidence_requirements: list[str] = Field(default_factory=list)
     learning_sequence: list[str] = Field(min_length=1)
-    estimated_concepts: int = Field(ge=6, le=40)
+    estimated_concepts: int = Field(ge=1)
     estimated_minutes: int = Field(ge=30, le=1_440)
     completion_criteria: list[str] = Field(min_length=1)
 
@@ -106,14 +109,18 @@ class AtlasModule(BaseModel):
 class ConceptNode(BaseModel):
     id: str
     module_id: str
+    section_type: str | None = None
     name: str
     definition: str
-    why_it_matters: str
+    why_it_matters: str = ""
     key_points: list[str] = Field(default_factory=list, max_length=5)
     example: str | None = None
+    hands_on: str = ""
+    reading: str = ""
     evidence_ids: list[str] = Field(default_factory=list)
     misconception: str | None = None
     uncertainty: str | None = None
+    quiz: list[QuizQuestion] = Field(default_factory=list)
 
 
 class ConceptRelation(BaseModel):
@@ -225,6 +232,14 @@ class AssessmentFeedback(BaseModel):
     review_concept_ids: list[str] = Field(default_factory=list)
 
 
+class QuizResult(BaseModel):
+    concept_id: str
+    question_index: int
+    selected_index: int
+    correct: bool
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 class DemoError(BaseModel):
     code: str
     message: str
@@ -247,7 +262,11 @@ class DemoRun(BaseModel):
     fallback_notes: list[str] = Field(default_factory=list)
     events: list[RunEvent] = Field(default_factory=list)
     progress: dict[str, Literal["unvisited", "unclear", "understood"]] = Field(default_factory=dict)
+    mission: MissionDoc | None = None
+    learner_model: LearnerModel | None = None
     assessment_results: list[AssessmentFeedback] = Field(default_factory=list)
+    quiz_results: list[QuizResult] = Field(default_factory=list)
+    growth_complete: bool = False
     pre_search_results: dict[str, list[dict]] = Field(default_factory=dict)
     error: DemoError | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
