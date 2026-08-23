@@ -132,6 +132,7 @@ export default function CreateRun() {
               <input
                 value={brief.domain}
                 onChange={(event) => update("domain", event.target.value)}
+                onKeyDown={(event) => { if (event.key === "Enter") next(); }}
                 placeholder="比如：Agent 系统设计…"
                 autoFocus
               />
