@@ -236,6 +236,7 @@ export default function AtlasRoute() {
         })}
       </nav>
 
+      {selected ? <div className="node-lesson-backdrop" onClick={() => setSelectedId("")} aria-hidden="true" /> : null}
       {selected ? (
         <NodeLesson
           concept={selected}

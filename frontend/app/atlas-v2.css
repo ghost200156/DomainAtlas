@@ -1250,6 +1250,14 @@ body:has(.atlas-explorer) .site-header {
 .atlas-explorer .grow-button:disabled { opacity: .5; cursor: default; }
 .atlas-explorer .grow-button:not(:disabled):hover { transform: translateY(-1px); }
 
+.atlas-explorer .node-lesson-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 44;
+  background: rgba(10, 18, 40, .38);
+  cursor: default;
+}
+
 .atlas-explorer .node-lesson {
   position: fixed;
   z-index: 45;
