@@ -8,6 +8,7 @@ from app.schemas.demo import (
     AtlasOverview,
     ConceptNode,
     ConceptRelation,
+    DemoRun,
     DemoError,
     RunEvent,
     RunStatus,
