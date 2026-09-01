@@ -1411,10 +1411,34 @@ body:has(.atlas-explorer) .site-header {
   padding: 12px 14px;
   border: 1px solid rgba(91, 93, 230, .12);
   border-radius: 10px;
+  overflow-x: auto;
   background: #fff;
   color: #35425f;
   font-size: 14px;
   line-height: 1.75;
+}
+.atlas-explorer .node-lesson-plain table {
+  width: 100%;
+  margin: 12px 0;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.atlas-explorer .node-lesson-plain th,
+.atlas-explorer .node-lesson-plain td {
+  padding: 9px 12px;
+  border: 1px solid rgba(91, 93, 230, .18);
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+.atlas-explorer .node-lesson-plain th {
+  background: rgba(91, 93, 230, .08);
+  color: #1e2b4f;
+  font-weight: 700;
+}
+.atlas-explorer .node-lesson-plain tbody tr:nth-child(even) {
+  background: rgba(91, 93, 230, .025);
 }
 
 .atlas-explorer .node-lesson-section {
